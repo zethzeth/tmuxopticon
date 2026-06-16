@@ -1,0 +1,13 @@
+# slack-alarm-watch — false-alarm filter
+# ---------------------------------------
+# One extended-regex (grep -E) pattern per line. Any new message whose text
+# matches ANY pattern here is treated as a *false alarm* and dropped — it never
+# reaches the sidebar. Matching is case-insensitive. Edit this freely; the next
+# poll (within a minute) picks up changes. Lines starting with # are comments.
+#
+# Examples (uncomment / adapt):
+# resolved
+# back to normal
+# test alert
+# ^heartbeat
+# acknowledged by .*

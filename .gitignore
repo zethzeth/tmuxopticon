@@ -1,0 +1,13 @@
+# Runtime cache files (the collector writes per-provider caches here)
+tmp/*
+!tmp/.gitkeep
+
+# Secrets / local config never belong in the repo — they live in
+# ~/.config/tmuxopticon (see docs/). Defensive ignores in case anyone
+# drops one in the tree by mistake.
+*.key
+*.env
+!*.env.example
+
+.DS_Store
+__pycache__/

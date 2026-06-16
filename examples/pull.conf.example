@@ -1,0 +1,27 @@
+# tmuxopticon pull.conf — which status providers the collector pulls.
+#
+# Copy this to ~/.config/tmuxopticon/pull.conf and flip the flags you want.
+# The collector (providers/collect.sh) runs once a minute from cron, reads this
+# file, and runs each ENABLED provider's puller, which overwrites a cache file in
+# tmuxopticon's tmp/ folder. The sidebar renders only the enabled providers.
+#
+#   * * * * * /path/to/tmuxopticon/providers/collect.sh >/dev/null 2>&1
+#
+# A flag is "on" only when set to exactly: true | 1 | yes
+# A flag's NAME comes from each provider's manifest (provider.conf -> `flag`), so
+# the flags below match the bundled providers; a custom provider you drop in
+# ~/.config/tmuxopticon/providers.d/ brings its own flag name to set here.
+#
+# A provider also stays silent until its prerequisite exists (Uptime Robot needs
+# ~/.config/tmuxopticon/uptimerobot.key; Slack needs ~/.config/tmuxopticon/slack.env;
+# PRs needs PRS_PULL_CMD below).
+
+SLACK_PULL_ENABLED=true
+UPTIME_ROBOT_PULL_ENABLED=true
+PRS_PULL_ENABLED=true
+
+# Absolute path to the PRs puller. The Open PRs provider ships no puller (which
+# PRs are "yours" is service-specific), so point this at your own script — it's
+# invoked as `$PRS_PULL_CMD <cachefile>`. See providers/prs/README.md.
+# Leave empty / unset to disable PRs even if the flag is true.
+PRS_PULL_CMD=
