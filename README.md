@@ -44,7 +44,8 @@ $ shell   ~/scratch
 - **Jump anywhere.** `prefix 1`…`prefix 9` switches to the Nth listed session;
   clicking a session's row does the same.
 - **Name & cull sessions.** `prefix t` renames the current session; `prefix K`
-  opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current).
+  opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current,
+  `prefix K a` kills all *other* sessions).
 - **A status panel at the bottom.** A bottom-anchored stack of boxes for
   at-a-glance health signals from elsewhere — **Uptime Robot** monitors, **open
   PRs** to review, **Slack alarm** channels. These are pulled by a once-a-minute
@@ -87,6 +88,7 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 | `prefix t`       | Rename the current session                        |
 | `prefix K` `N`   | Kill the Nth session (with confirm)               |
 | `prefix K` `K`   | Kill the current session (with confirm)           |
+| `prefix K` `a`   | Kill ALL sessions except the current (with confirm) |
 
 ## Options
 

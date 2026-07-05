@@ -476,8 +476,9 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
     prefix t          rename the current session
 
   ${C_BOLD}Kill${C_RESET}  (prefix K opens a kill table, then:)
-    prefix K 1 … 9    kill the Nth session       (with confirm)
-    prefix K K        kill the current session   (with confirm)
+    prefix K 1 … 9    kill the Nth session            (with confirm)
+    prefix K K        kill the current session        (with confirm)
+    prefix K a        kill ALL sessions but this one  (with confirm)
 
   ${C_BOLD}Status box${C_RESET}  (bottom of the sidebar — fed by the cron collector)
     Start/stop the collector (off by default) with
