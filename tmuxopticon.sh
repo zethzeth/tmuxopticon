@@ -182,12 +182,21 @@ session_pane_rows() { # one "<pane_index>\t<status>\t<path>" line per non-sideba
 }
 
 session_title() { # -> active pane title, blank for default/uninteresting ones
-  local sess="$1" title host
+  local sess="$1" title host shost
   title="$(tmux display-message -p -t "$sess" '#{pane_title}' 2>/dev/null)"
   host="$(tmux display-message -p '#{host}' 2>/dev/null)"
   case "$title" in "$host"|"$SIDEBAR_TITLE"|'') return;; esac
   # drop any leading icon/spinner glyph + spaces so the real text shows from col 1
   title="$(printf '%s' "$title" | sed -E 's/^[^[:alnum:]]+//')"
+  # drop a leading "user@localhost:" — the shell's default title is
+  # user@host:path, and the local user+host is pure noise in the sidebar.
+  # Match both the full hostname and its short form (mac: Foo.local vs Foo).
+  # Runs after the icon strip so the "~" of the remaining path survives.
+  shost="${host%%.*}"
+  case "$title" in
+    "${USER:-}@${host}:"*)  title="${title#"${USER:-}@${host}:"}";;
+    "${USER:-}@${shost}:"*) title="${title#"${USER:-}@${shost}:"}";;
+  esac
   printf '%s' "$title"
 }
 
@@ -314,7 +323,7 @@ render() {
 
     # --- build the frame + a row->session map, then paint once (no flicker) ---
     # \033[K clears each line to its end; \033[J clears any leftover rows below.
-    local out='' rows='' cur s idx=0 mark jump name hdr pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
+    local out='' rows='' cur s idx=0 mark jump name nb hdr pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
     cur="$(current_session)"
     while IFS= read -r s; do
       [ -n "$s" ] || continue
@@ -323,10 +332,15 @@ render() {
       mark=' '; [ "$s" = "$cur" ] && mark='▶'
       if [ "$idx" -le 9 ]; then jump="[$idx]"; else jump='[ ]'; fi
       name="$(session_label "$s")"; [ -n "$name" ] || name="$s"   # friendly name, else raw session
+      # truncate the name to the room *left of* the "▶[N]  " prefix (7 cols on
+      # the active row — mark+jump+chip space+2 gaps — 6 on the rest), so a long
+      # title never overflows the sidebar width and wraps onto the next row.
       if [ "$s" = "$cur" ]; then                          # make the active session pop
-        hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${name:0:tw}${C_RESET}"
+        nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
+        hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${name:0:nb}${C_RESET}"
       else
-        hdr="${mark}${jump}  ${name:0:tw}"
+        nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
+        hdr="${mark}${jump}  ${name:0:nb}"
       fi
       out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
       # one line per split: "<icon> <label>   <path>" — Claude state for Claude
