@@ -41,7 +41,8 @@ C_WORK=$'\033[33m'   # yellow
 C_WAIT=$'\033[35m'   # purple
 C_NVIM=$'\033[36m'   # cyan — a split running nvim/vim
 C_REMOTE=$'\033[34m' # blue — an SSH pane (host-prefixed path)
-C_NOTE=$'\033[93m'   # bright yellow — the per-session note line (prefix m)
+C_NOTE=$'\033[95m'   # bright purple — the per-session note (prefix m); brighter
+                     # than C_WAIT's purple, and clear of C_WORK's yellow
 C_BLOCKED=$'\033[1;31m' # bold red — a note starting with "BLOCK…" (you're stuck)
 C_DOWN=$'\033[31m'   # red — a status provider reporting trouble (e.g. a down monitor)
 C_ALERT=$'\033[1;97;41m'  # bold bright-white ON red — the loud error banner text
