@@ -50,6 +50,14 @@ tmux bind o run-shell "'$SCRIPT' toggle"
 # Name the current SESSION (persists, shows in the sidebar and in 'prefix s')
 tmux bind t command-prompt -p "session name:" "rename-session '%%'"
 
+# A one-line note for the current SESSION ("Next step: write tests", "BLOCKED:
+# needs local setup"), shown under its name in the sidebar. Prefilled with the
+# current note so you edit rather than retype; submit empty to clear. Stored as
+# a per-session tmux option (@tmuxopticon-note) — no files, survives renames,
+# dies with the session. (Repurposes tmux's default 'prefix m' = mark-pane.)
+# (%%% = the prompt response with quotes escaped, so notes may contain ' and ".)
+tmux bind m command-prompt -I '#{@tmuxopticon-note}' -p 'session note:' 'set-option @tmuxopticon-note "%%%"'
+
 # Kill a session: 'prefix K' then its sidebar number; 'prefix K K' kills the
 # current one; 'prefix K a' kills every session EXCEPT the current one
 tmux bind K switch-client -T tmuxopticon-kill
@@ -76,6 +84,14 @@ tmux bind 6 run-shell "'$SCRIPT' jump 6"
 tmux bind 7 run-shell "'$SCRIPT' jump 7"
 tmux bind 8 run-shell "'$SCRIPT' jump 8"
 tmux bind 9 run-shell "'$SCRIPT' jump 9"
+
+# Cycle through the sessions in sidebar order (wraps at the ends). This
+# repurposes tmux's default 'prefix n'/'prefix p' (next/previous-window);
+# windows stay reachable via 'prefix w' / 'prefix l', or opt out of the
+# default keys entirely.
+tmux bind n run-shell "'$SCRIPT' next"
+tmux bind p run-shell "'$SCRIPT' prev"
+tmux bind N run-shell "'$SCRIPT' prev"
 
 # Click a session row in the sidebar to switch to it
 tmux bind -n MouseDown1Pane if-shell -F -t '=' '#{==:#{pane_title},tmuxopticon}' "run-shell \"'$SCRIPT' click #{mouse_y}\"" "select-pane -t '=' ; send -M"

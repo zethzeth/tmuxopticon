@@ -13,7 +13,8 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 ## Files
 
 - `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `render`,
-  `jump N`, `click Y`, `kill N`, `help` (`-h`/`--help`). No daemon; the redraw
+  `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping), `click Y`,
+  `kill N`, `help` (`-h`/`--help`). No daemon; the redraw
   loop (`render`) runs *inside* the sidebar pane itself. `help` prints the key
   table, reading the live prefix from `tmux show-option -gv prefix`. The status
   panel is read-only here — `render` never fetches; it just reads cache files
@@ -84,6 +85,13 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 - **State lives in tmux options**, not files: `@tmuxopticon-active` (0/1) is the
   global on/off; `-width` / `-interval` are config. Options are read live each
   frame, so config changes apply without a reload.
+- **Per-session notes are tmux options too**: `prefix m` prompts (prefilled via
+  `command-prompt -I '#{@tmuxopticon-note}'`) and stores the text as a
+  *session-scoped* user option `@tmuxopticon-note`; `render` draws it as a `✎`
+  line under the session header (`session_note`), bold red when it starts with
+  `BLOCK`. Deliberately no file store: the note survives renames (options ride
+  the session, not its name) and dies with the session — matching the lifetime
+  of a "Next step: …" jotting.
 - **The drawer follows focus** via `after-select-window` / `after-new-window` /
   `client-session-changed` hooks, each calling `ensure` (a cheap no-op when
   inactive or already present). Don't add a daemon to do this.
@@ -141,7 +149,7 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
 - **One generic renderer**: `provider_box <title> <cachefile> <tw>` replaced the
   old per-provider `uptimerobot_box`/`alarms_box`. It maps state→icon
   (`ok`→green `○`, `info`→neutral `•`, `warn`→red `●`), prints the summary, then
-  up to `max` detail lines, and prefixes `⚠ stale (Ns)` when `epoch` is older than
+  up to `max` detail lines, and prefixes `Last sync: H:MM (N min ago)` when `epoch` is older than
   `@tmuxopticon-provider-stale` (default 180s). `info` is the neutral state for a
   count/FYI that isn't a health verdict (Open PRs uses it, so a PR count never
   lights the box red). A box that has no cache file yet draws **nothing**

@@ -27,8 +27,9 @@ line 4+ detail lines   dimmed, indented (optional)
 
 The sidebar maps `ok → ○` (green), `info → •` (neutral — a count/FYI, e.g. Open
 PRs), `warn → ●` (red), and renders `err` as a **full-width red banner** (so a
-real failure can't be missed). It shows `⚠ stale` when a cache's epoch is older
-than `@tmuxopticon-provider-stale` (default 180s) — the tell that cron stopped.
+real failure can't be missed). It shows `Last sync: H:MM (N min ago)` when a
+cache's epoch is older than `@tmuxopticon-provider-stale` (default 180s) — the
+tell that cron stopped.
 
 ## 1. Enable the providers you want
 
@@ -174,7 +175,7 @@ See `lib/providers.sh` for the full manifest reference and
 
 - **Box never appears** — is the flag exactly `true`/`1`/`yes`? Did the cache
   file get written (`ls tmp/`)? Is the cron line installed (`crontab -l`)?
-- **`⚠ stale`** — cron isn't running `collect.sh`. Check `crontab -l`, the path
+- **`Last sync: …`** — cron isn't running `collect.sh`. Check `crontab -l`, the path
   in the cron line, and that `collect.sh` is executable.
 - **Uptime Robot `⚠ no API key`** — the key file is missing/empty at
   `~/.config/tmuxopticon/uptimerobot.key`.

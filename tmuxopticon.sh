@@ -39,6 +39,8 @@ C_WORK=$'\033[33m'   # yellow
 C_WAIT=$'\033[35m'   # purple
 C_NVIM=$'\033[36m'   # cyan — a split running nvim/vim
 C_REMOTE=$'\033[34m' # blue — an SSH pane (host-prefixed path)
+C_NOTE=$'\033[93m'   # bright yellow — the per-session note line (prefix m)
+C_BLOCKED=$'\033[1;31m' # bold red — a note starting with "BLOCK…" (you're stuck)
 C_DOWN=$'\033[31m'   # red — a status provider reporting trouble (e.g. a down monitor)
 C_ALERT=$'\033[1;97;41m'  # bold bright-white ON red — the loud error banner text
 C_ALERTBAR=$'\033[41m'    # solid red background — the error banner's top/bottom bars
@@ -206,6 +208,14 @@ session_label() { # the manual session name if you set one, else the (Claude) pa
   session_title "$sess"                                            # numeric/auto = show pane title
 }
 
+session_note() { # -> the session's one-line note (@tmuxopticon-note), if any
+  # Stored as a per-session tmux user option, set via `prefix m` (see the
+  # bindings in tmuxopticon.tmux). No files: the note survives a rename
+  # (options ride the session, not its name) and dies with the session —
+  # which is the right lifetime for "Next step: …" / "BLOCKED: …" jottings.
+  tmux show-option -qv -t "$1" @tmuxopticon-note 2>/dev/null
+}
+
 current_session() { # the session owning this sidebar pane
   tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null
 }
@@ -229,7 +239,7 @@ pull_enabled() { # pull_enabled <KEY> — true if pull.conf sets KEY to true/1/y
 provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divider+title+body)
   local title="$1" cache="$2" tw="$3"
   [ -r "$cache" ] || return 0          # enabled but nothing pulled yet -> stay quiet
-  local stale now epoch state summary line details=() idx=0 shown=0 max=6 div age icon col bar pad
+  local stale now epoch state summary line details=() idx=0 shown=0 max=6 div age icon col bar pad staleline synctime
   stale="$(opt @tmuxopticon-provider-stale 180)"       # cron refreshes ~every 60s; flag if cold
   printf -v div '%*s' "$tw" ''; div="${div// /─}"
   # Read the whole cache first, so the renderer can pick a layout from the state
@@ -240,6 +250,13 @@ provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divid
   done < "$cache"
   now="$(date +%s)"; case "${epoch:-}" in ''|*[!0-9]*) epoch=0;; esac
   age=$(( now - epoch ))
+  # Only call out a cold cache once it's older than the stale threshold (default
+  # 3 min). Show the wall-clock time of the last sync + how long ago, in minutes.
+  staleline=''
+  if [ "$age" -ge "$stale" ]; then
+    synctime="$(date -d "@$epoch" '+%-H:%M' 2>/dev/null || date -r "$epoch" '+%H:%M' 2>/dev/null)"
+    staleline="${C_WAIT} Last sync: ${synctime} ($(( age / 60 )) min ago)${C_RESET}"
+  fi
 
   if [ "${state:-}" = err ]; then
     # ERROR: scream. A block of red — solid bars top & bottom and reverse-video
@@ -254,13 +271,13 @@ provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divid
       [ -n "$line" ] && bline "  ${line}"; shown=$((shown + 1))
     done
     printf '%s\n' "${C_ALERTBAR}${bar}${C_RESET}"                 # bottom bar
-    [ "$age" -ge "$stale" ] && printf '%s\n' "${C_WAIT} ⚠ stale (${age}s)${C_RESET}"
+    [ -n "$staleline" ] && printf '%s\n' "$staleline"
     return 0
   fi
 
   printf '%s\n' "${C_DIM}${div}${C_RESET}"
   printf '%s\n' "${C_BOLD} ${title:0:tw}${C_RESET}"
-  [ "$age" -ge "$stale" ] && printf '%s\n' "${C_WAIT} ⚠ stale (${age}s)${C_RESET}"   # cron stopped?
+  [ -n "$staleline" ] && printf '%s\n' "$staleline"   # cron stopped?
   case "${state:-}" in                                  # icon + colour by state
     ok)   icon='○'; col="$C_DONE";;
     info) icon='•'; col="$C_RESET";;                    # neutral: a count/FYI, not a health verdict
@@ -323,7 +340,7 @@ render() {
 
     # --- build the frame + a row->session map, then paint once (no flicker) ---
     # \033[K clears each line to its end; \033[J clears any leftover rows below.
-    local out='' rows='' cur s idx=0 mark jump name nb hdr pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
+    local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
     cur="$(current_session)"
     while IFS= read -r s; do
       [ -n "$s" ] || continue
@@ -343,6 +360,14 @@ render() {
         hdr="${mark}${jump}  ${name:0:nb}"
       fi
       out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
+      # The session's note ("Next step: …"), right under its name — your own
+      # one-liner about where this session is at, so you don't have to read the
+      # Claude wall of text to re-orient. "BLOCK…" notes turn bold red.
+      note="$(session_note "$s")"
+      if [ -n "$note" ] && [ "$prow" -lt "$avail" ]; then
+        case "${note^^}" in BLOCK*) ncol="$C_BLOCKED";; *) ncol="$C_NOTE";; esac
+        out+="${ncol} ✎ ${note:0:$((tw-3))}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
+      fi
       # one line per split: "<icon> <label>   <path>" — Claude state for Claude
       # panes, terminal type (nvim/remote/shell) for the rest.
       while IFS=$'\t' read -r pidx stat ppath; do
@@ -436,6 +461,22 @@ jump() { # jump <N>  (1-based index into the canonical order); no-op if absent
   return 0
 }
 
+step() { # step <1|-1>  next/prev session in the sidebar's canonical order, wrapping
+  # Deliberately NOT tmux's own `switch-client -n`: that cycles alphabetically,
+  # which diverges from the creation-order list the sidebar shows.
+  local dir="${1:-1}" cur list n idx target
+  cur="$(current_session)"
+  list="$(ordered_sessions)"
+  n="$(printf '%s\n' "$list" | grep -c .)"
+  [ "$n" -gt 1 ] || return 0
+  idx="$(printf '%s\n' "$list" | grep -nxF -- "$cur" | cut -d: -f1)"
+  [ -n "$idx" ] || idx=1
+  idx=$(( (idx - 1 + dir + n) % n + 1 ))
+  target="$(printf '%s\n' "$list" | sed -n "${idx}p")"
+  [ -n "$target" ] && tmux switch-client -t "$target"
+  return 0
+}
+
 click() { # click <Y>  (0-based pane row); resolve the session via the row map
   local y="${1:-}" idx
   case "$y" in ''|*[!0-9]*) return 0;; esac
@@ -471,9 +512,14 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Jump${C_RESET}
     prefix 1 … 9      jump to the Nth session in the list
+    prefix n / p      next / previous session in the list (wraps)
 
   ${C_BOLD}Sessions${C_RESET}
     prefix t          rename the current session
+    prefix m          set/edit the session's one-line note (${C_NOTE}✎${C_RESET} under its
+                      name in the sidebar). Prefilled for editing; submit
+                      empty to clear. A note starting with "BLOCK" goes
+                      ${C_BLOCKED}bold red${C_RESET} — e.g. "BLOCKED: needs local setup".
 
   ${C_BOLD}Kill${C_RESET}  (prefix K opens a kill table, then:)
     prefix K 1 … 9    kill the Nth session            (with confirm)
@@ -490,7 +536,7 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
       ${C_DIM}SLACK_PULL_ENABLED=true${C_RESET}        Slack alarm channels  → Alarms box
       ${C_DIM}UPTIME_ROBOT_PULL_ENABLED=true${C_RESET} Uptime Robot monitors → Uptime Robot box
       ${C_DIM}PRS_PULL_ENABLED=true${C_RESET}          open PRs to review    → Open PRs box
-    Icons:  ${C_DONE}○ ok${C_RESET}   • info   ${C_DOWN}● needs attention${C_RESET}   ${C_ALERT} ⚠ ERROR ${C_RESET}   ${C_WAIT}⚠ stale${C_RESET} (cron stopped)
+    Icons:  ${C_DONE}○ ok${C_RESET}   • info   ${C_DOWN}● needs attention${C_RESET}   ${C_ALERT} ⚠ ERROR ${C_RESET}   ${C_WAIT}Last sync: …${C_RESET} (cron stopped)
 
   ${C_BOLD}Config${C_RESET}  (set -g in your .tmux.conf)
     @tmuxopticon-width           sidebar width in columns       (default 34)
@@ -507,8 +553,10 @@ case "$cmd" in
   ensure) ensure;;
   render) render;;
   jump)   jump "${1:-}";;
+  next)   step 1;;
+  prev)   step -1;;
   click)  click "${1:-}";;
   kill)   killn "${1:-}";;
   help|-h|--help) help;;
-  *) printf 'usage: %s {toggle|ensure|render|jump N|click Y|kill N|help}\n' "$SELF" >&2; exit 2;;
+  *) printf 'usage: %s {toggle|ensure|render|jump N|next|prev|click Y|kill N|help}\n' "$SELF" >&2; exit 2;;
 esac

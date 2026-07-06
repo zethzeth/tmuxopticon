@@ -13,10 +13,12 @@ you can glance left and jump straight to whichever session needs you.
 
 ```
 ▶[1]  refactor-auth     ← active session (highlighted)
+ ✎ Next step: write tests   your note for this session (prefix m)
 ● working ~/code/app    one line per split: state + path
 ◐ waiting ~/code/api
 ──────────────────────
  [2]  notes             a renamed session
+ ✎ BLOCKED: needs local setup   BLOCK… notes go bold red
 ○ done ~/code/dotfiles
 N nvim    ~/code/conf    plain panes get an icon too:
 ⇄ remote  zeod:~/api     nvim / SSH / local shell
@@ -42,10 +44,19 @@ $ shell   ~/scratch
   not running Claude get a type icon instead: `N nvim`, `⇄ remote` (an SSH
   pane), or `$ shell` (a plain local terminal).
 - **Jump anywhere.** `prefix 1`…`prefix 9` switches to the Nth listed session;
-  clicking a session's row does the same.
+  clicking a session's row does the same. `prefix n` / `prefix p` cycles to the
+  next / previous session in the list, wrapping at the ends.
 - **Name & cull sessions.** `prefix t` renames the current session; `prefix K`
   opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current,
   `prefix K a` kills all *other* sessions).
+- **A note per session.** `prefix m` attaches a one-line note to the current
+  session — "Next step: write tests", "waiting on review" — shown with a `✎`
+  right under the session's name. It's your own re-orientation line: glance at
+  the card instead of re-reading a Claude transcript to remember where a
+  session is at. The prompt is prefilled with the current note (edit, don't
+  retype); submit empty to clear. A note starting with `BLOCK` renders bold
+  red. Stored as a per-session tmux option (`@tmuxopticon-note`) — no files,
+  survives renames, dies with the session.
 - **A status panel at the bottom.** A bottom-anchored stack of boxes for
   at-a-glance health signals from elsewhere — **Uptime Robot** monitors, **open
   PRs** to review, **Slack alarm** channels. These are pulled by a once-a-minute
@@ -84,8 +95,10 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 | ---------------- | ------------------------------------------------- |
 | `prefix o`       | Toggle the sidebar on/off (global)                |
 | `prefix 1`…`9`   | Jump to the Nth session in the list               |
+| `prefix n` / `p` | Next / previous session in the list (wraps)       |
 | click a row      | Jump to that session                              |
 | `prefix t`       | Rename the current session                        |
+| `prefix m`       | Set/edit the session's note (empty clears it)     |
 | `prefix K` `N`   | Kill the Nth session (with confirm)               |
 | `prefix K` `K`   | Kill the current session (with confirm)           |
 | `prefix K` `a`   | Kill ALL sessions except the current (with confirm) |
@@ -157,8 +170,8 @@ file in the plugin's `tmp/` folder. The sidebar only ever *reads* those caches.
 Every box uses the same shape: a state (`ok` → green `○`, `info` → neutral `•`,
 `warn` → red `●`), a one-line summary, and optional detail lines. An `err` state
 is loud on purpose — the whole box turns into a **full-width red banner** so a
-real failure can't be missed. A box reads `⚠ stale` if its cache stops refreshing
-— the tell that cron has stopped.
+real failure can't be missed. A box reads `Last sync: H:MM (N min ago)` if its
+cache stops refreshing — the tell that cron has stopped.
 
 **Enable providers** in `~/.config/tmuxopticon/pull.conf` (copy
 `examples/pull.conf.example`):
