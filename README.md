@@ -47,16 +47,20 @@ $ shell   ~/scratch
   clicking a session's row does the same. `prefix n` / `prefix p` cycles to the
   next / previous session in the list, wrapping at the ends.
 - **Name & cull sessions.** `prefix t` renames the current session; `prefix K`
-  opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current,
+  opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current
+  session and hops to the next one — wrapping — instead of detaching you,
   `prefix K a` kills all *other* sessions).
-- **A note per session.** `prefix m` attaches a one-line note to the current
-  session — "Next step: write tests", "waiting on review" — shown with a `✎`
-  right under the session's name. It's your own re-orientation line: glance at
-  the card instead of re-reading a Claude transcript to remember where a
-  session is at. The prompt is prefilled with the current note (edit, don't
-  retype); submit empty to clear. A note starting with `BLOCK` renders bold
-  red. Stored as a per-session tmux option (`@tmuxopticon-note`) — no files,
-  survives renames, dies with the session.
+- **A note per session.** `prefix m` attaches a note to the current session —
+  "Next step: write tests", "waiting on review" — shown with a `✎` right under
+  the session's name. It's your own re-orientation line: glance at the card
+  instead of re-reading a Claude transcript to remember where a session is at.
+  The prompt is prefilled with the current note (edit, don't retype); submit
+  empty to clear. Notes are **never cut off**: long ones word-wrap across as
+  many sidebar rows as needed (an overlong URL/path is hard-split), and typing
+  a literal `\n` forces a line break — the prompt itself is single-line, so
+  that's how you author multi-line notes. A note starting with `BLOCK` renders
+  bold red. Stored as a per-session tmux option (`@tmuxopticon-note`) — no
+  files, survives renames, dies with the session.
 - **A status panel at the bottom.** A bottom-anchored stack of boxes for
   at-a-glance health signals from elsewhere — **Uptime Robot** monitors, **open
   PRs** to review, **Slack alarm** channels. These are pulled by a once-a-minute
@@ -98,7 +102,7 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 | `prefix n` / `p` | Next / previous session in the list (wraps)       |
 | click a row      | Jump to that session                              |
 | `prefix t`       | Rename the current session                        |
-| `prefix m`       | Set/edit the session's note (empty clears it)     |
+| `prefix m`       | Set/edit the session's note (empty clears; `\n` = line break) |
 | `prefix K` `N`   | Kill the Nth session (with confirm)               |
 | `prefix K` `K`   | Kill the current session (with confirm)           |
 | `prefix K` `a`   | Kill ALL sessions except the current (with confirm) |

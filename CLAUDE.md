@@ -14,7 +14,8 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 
 - `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `render`,
   `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping), `click Y`,
-  `kill N`, `help` (`-h`/`--help`). No daemon; the redraw
+  `kill N`, `killcur` (kill the current session after hopping to the next one,
+  wrapping, so the client isn't detached), `help` (`-h`/`--help`). No daemon; the redraw
   loop (`render`) runs *inside* the sidebar pane itself. `help` prints the key
   table, reading the live prefix from `tmux show-option -gv prefix`. The status
   panel is read-only here — `render` never fetches; it just reads cache files
@@ -88,8 +89,11 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 - **Per-session notes are tmux options too**: `prefix m` prompts (prefilled via
   `command-prompt -I '#{@tmuxopticon-note}'`) and stores the text as a
   *session-scoped* user option `@tmuxopticon-note`; `render` draws it as a `✎`
-  line under the session header (`session_note`), bold red when it starts with
-  `BLOCK`. Deliberately no file store: the note survives renames (options ride
+  block under the session header (`session_note` + `wrap_note`), bold red when
+  it starts with `BLOCK`. Notes are never truncated: `wrap_note` word-wraps to
+  the sidebar width (hard-splitting overlong words) and expands a literal `\n`
+  into a line break; continuation rows indent under the `✎`. Deliberately no
+  file store: the note survives renames (options ride
   the session, not its name) and dies with the session — matching the lifetime
   of a "Next step: …" jotting.
 - **The drawer follows focus** via `after-select-window` / `after-new-window` /

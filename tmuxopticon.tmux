@@ -50,16 +50,19 @@ tmux bind o run-shell "'$SCRIPT' toggle"
 # Name the current SESSION (persists, shows in the sidebar and in 'prefix s')
 tmux bind t command-prompt -p "session name:" "rename-session '%%'"
 
-# A one-line note for the current SESSION ("Next step: write tests", "BLOCKED:
-# needs local setup"), shown under its name in the sidebar. Prefilled with the
-# current note so you edit rather than retype; submit empty to clear. Stored as
-# a per-session tmux option (@tmuxopticon-note) — no files, survives renames,
+# A note for the current SESSION ("Next step: write tests", "BLOCKED: needs
+# local setup"), shown under its name in the sidebar. Prefilled with the
+# current note so you edit rather than retype; submit empty to clear. Long
+# notes word-wrap in the sidebar (never truncated); the prompt itself is
+# single-line, so type a literal \n to force a line break. Stored as a
+# per-session tmux option (@tmuxopticon-note) — no files, survives renames,
 # dies with the session. (Repurposes tmux's default 'prefix m' = mark-pane.)
 # (%%% = the prompt response with quotes escaped, so notes may contain ' and ".)
 tmux bind m command-prompt -I '#{@tmuxopticon-note}' -p 'session note:' 'set-option @tmuxopticon-note "%%%"'
 
-# Kill a session: 'prefix K' then its sidebar number; 'prefix K K' kills the
-# current one; 'prefix K a' kills every session EXCEPT the current one
+# Kill a session: 'prefix K' then its sidebar number; 'prefix K K' (or 'K k')
+# kills the current one and hops to the next session (wrapping) so the client
+# isn't detached; 'prefix K a' kills every session EXCEPT the current one
 tmux bind K switch-client -T tmuxopticon-kill
 tmux bind -T tmuxopticon-kill 1 run-shell "'$SCRIPT' kill 1"
 tmux bind -T tmuxopticon-kill 2 run-shell "'$SCRIPT' kill 2"
@@ -70,7 +73,8 @@ tmux bind -T tmuxopticon-kill 6 run-shell "'$SCRIPT' kill 6"
 tmux bind -T tmuxopticon-kill 7 run-shell "'$SCRIPT' kill 7"
 tmux bind -T tmuxopticon-kill 8 run-shell "'$SCRIPT' kill 8"
 tmux bind -T tmuxopticon-kill 9 run-shell "'$SCRIPT' kill 9"
-tmux bind -T tmuxopticon-kill K confirm-before -p "kill current session? (y/n)" kill-session
+tmux bind -T tmuxopticon-kill K run-shell "'$SCRIPT' killcur"
+tmux bind -T tmuxopticon-kill k run-shell "'$SCRIPT' killcur"
 tmux bind -T tmuxopticon-kill a confirm-before -p "kill ALL other sessions? (y/n)" "kill-session -a"
 tmux bind -T tmuxopticon-kill Any switch-client -T root
 

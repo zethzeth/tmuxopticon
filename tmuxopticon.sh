@@ -10,6 +10,8 @@
 #   jump  <N>   switch to the Nth session as listed in the sidebar (1-based)
 #   click <Y>   switch to the session on pane row Y (used by the mouse binding)
 #   kill  <N>   kill the Nth session, with a y/n confirm
+#   killcur     kill the current session after hopping to the next one
+#               (wraps), so the client isn't detached; y/n confirm
 #   help        print the key bindings (also: -h, --help)
 #
 # The bottom status panel reads provider cache files written *outside* this
@@ -208,12 +210,37 @@ session_label() { # the manual session name if you set one, else the (Claude) pa
   session_title "$sess"                                            # numeric/auto = show pane title
 }
 
-session_note() { # -> the session's one-line note (@tmuxopticon-note), if any
+session_note() { # -> the session's note (@tmuxopticon-note), if any
   # Stored as a per-session tmux user option, set via `prefix m` (see the
   # bindings in tmuxopticon.tmux). No files: the note survives a rename
   # (options ride the session, not its name) and dies with the session —
   # which is the right lifetime for "Next step: …" / "BLOCKED: …" jottings.
   tmux show-option -qv -t "$1" @tmuxopticon-note 2>/dev/null
+}
+
+wrap_note() { # wrap_note <text> <width> — split a note into sidebar-width lines
+  # Notes are never truncated: text word-wraps at <width>, and a single word
+  # longer than <width> (a URL, a path) is hard-split rather than cut off.
+  # A literal "\n" typed into the note forces a line break — tmux's
+  # command-prompt is single-line, so that two-character sequence is the only
+  # way to author a break by hand. ${#…} is char-accurate for UTF-8 (LC_ALL).
+  local text="$1" w="$2" seg line word
+  [ "$w" -ge 1 ] || w=1
+  while IFS= read -r seg; do
+    [ -n "$seg" ] || { printf '\n'; continue; }   # explicit \n\n = a blank line
+    line=''
+    local -a words=()
+    read -ra words <<< "$seg"
+    for word in "${words[@]}"; do
+      if [ -z "$line" ]; then line="$word"
+      elif [ $(( ${#line} + 1 + ${#word} )) -le "$w" ]; then line="$line $word"
+      else printf '%s\n' "$line"; line="$word"
+      fi
+      while [ "${#line}" -gt "$w" ]; do printf '%s\n' "${line:0:w}"; line="${line:w}"; done
+    done
+    [ -n "$line" ] && printf '%s\n' "$line"
+  done <<< "${text//\\n/$'\n'}"
+  return 0
 }
 
 current_session() { # the session owning this sidebar pane
@@ -340,7 +367,7 @@ render() {
 
     # --- build the frame + a row->session map, then paint once (no flicker) ---
     # \033[K clears each line to its end; \033[J clears any leftover rows below.
-    local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
+    local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
     cur="$(current_session)"
     while IFS= read -r s; do
       [ -n "$s" ] || continue
@@ -361,12 +388,19 @@ render() {
       fi
       out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
       # The session's note ("Next step: …"), right under its name — your own
-      # one-liner about where this session is at, so you don't have to read the
-      # Claude wall of text to re-orient. "BLOCK…" notes turn bold red.
+      # jotting about where this session is at, so you don't have to read the
+      # Claude wall of text to re-orient. "BLOCK…" notes turn bold red. Notes
+      # are never cut off: wrap_note word-wraps them over as many rows as
+      # needed (a typed "\n" forces a break); continuations indent under the ✎.
       note="$(session_note "$s")"
-      if [ -n "$note" ] && [ "$prow" -lt "$avail" ]; then
+      if [ -n "$note" ]; then
         case "${note^^}" in BLOCK*) ncol="$C_BLOCKED";; *) ncol="$C_NOTE";; esac
-        out+="${ncol} ✎ ${note:0:$((tw-3))}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
+        nfirst=1
+        while IFS= read -r nline; do
+          [ "$prow" -ge "$avail" ] && break 2         # no room left before the box
+          if [ "$nfirst" = 1 ]; then npfx=' ✎ '; nfirst=0; else npfx='   '; fi
+          out+="${ncol}${npfx}${nline}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
+        done < <(wrap_note "$note" $(( tw - 3 )))
       fi
       # one line per split: "<icon> <label>   <path>" — Claude state for Claude
       # panes, terminal type (nvim/remote/shell) for the rest.
@@ -493,6 +527,27 @@ killn() { # kill <N>: kill the Nth session in the list, with a y/n confirm
   return 0
 }
 
+killcur() { # kill the current session, first hopping to the next one (wraps)
+  # Plain `kill-session` on the attached session detaches the client — you saw
+  # off the branch you're sitting on. So: switch to the next session in the
+  # sidebar's canonical order (wrapping past the end), THEN kill the old one.
+  local cur list n idx target
+  cur="$(current_session)"
+  [ -n "$cur" ] || return 0
+  list="$(ordered_sessions)"
+  n="$(printf '%s\n' "$list" | grep -c .)"
+  if [ "$n" -le 1 ]; then # nowhere to hop — plain kill, client detaches
+    tmux confirm-before -p "kill session '$cur'? (last one — will detach) (y/n)" "kill-session -t '$cur'"
+    return 0
+  fi
+  idx="$(printf '%s\n' "$list" | grep -nxF -- "$cur" | cut -d: -f1)"
+  [ -n "$idx" ] || idx=1
+  target="$(printf '%s\n' "$list" | sed -n "$(( idx % n + 1 ))p")"
+  tmux confirm-before -p "kill session '$cur'? (y/n)" \
+    "switch-client -t '$target' ; kill-session -t '$cur'"
+  return 0
+}
+
 help() { # print the key bindings (querying tmux for the live prefix key)
   local p disp
   p="$(tmux show-option -gv prefix 2>/dev/null)"; p="${p:-C-b}"
@@ -516,15 +571,16 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Sessions${C_RESET}
     prefix t          rename the current session
-    prefix m          set/edit the session's one-line note (${C_NOTE}✎${C_RESET} under its
-                      name in the sidebar). Prefilled for editing; submit
-                      empty to clear. A note starting with "BLOCK" goes
-                      ${C_BLOCKED}bold red${C_RESET} — e.g. "BLOCKED: needs local setup".
+    prefix m          set/edit the session's note (${C_NOTE}✎${C_RESET} under its name in
+                      the sidebar). Prefilled for editing; submit empty to
+                      clear. Long notes word-wrap — nothing is cut off — and
+                      a typed \n forces a line break. A note starting with
+                      "BLOCK" goes ${C_BLOCKED}bold red${C_RESET} — e.g. "BLOCKED: no local db".
 
   ${C_BOLD}Kill${C_RESET}  (prefix K opens a kill table, then:)
-    prefix K 1 … 9    kill the Nth session            (with confirm)
-    prefix K K        kill the current session        (with confirm)
-    prefix K a        kill ALL sessions but this one  (with confirm)
+    prefix K 1 … 9    kill the Nth session                        (with confirm)
+    prefix K K        kill current session + hop to next (wraps)  (with confirm)
+    prefix K a        kill ALL sessions but this one              (with confirm)
 
   ${C_BOLD}Status box${C_RESET}  (bottom of the sidebar — fed by the cron collector)
     Start/stop the collector (off by default) with
@@ -557,6 +613,7 @@ case "$cmd" in
   prev)   step -1;;
   click)  click "${1:-}";;
   kill)   killn "${1:-}";;
+  killcur) killcur;;
   help|-h|--help) help;;
-  *) printf 'usage: %s {toggle|ensure|render|jump N|next|prev|click Y|kill N|help}\n' "$SELF" >&2; exit 2;;
+  *) printf 'usage: %s {toggle|ensure|render|jump N|next|prev|click Y|kill N|killcur|help}\n' "$SELF" >&2; exit 2;;
 esac
