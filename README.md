@@ -299,7 +299,7 @@ manifest reference.
 ## Requirements
 
 - tmux 3.x
-- bash, perl, git
+- bash 3.2+ (macOS's stock `/bin/bash` is enough), perl, git
 - curl, jq (for the network status providers; not needed otherwise)
 - cron (to run the status-panel collector; the sidebar itself works without it)
 

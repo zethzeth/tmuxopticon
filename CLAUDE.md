@@ -10,6 +10,14 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 `@cwd` var that `ubuntu/tmux/update-pane-cwd.sh` sets, and falls back to
 `pane_current_path` when absent (so macOS still works).
 
+**All shell code must stay bash-3.2 compatible** — macOS ships `/bin/bash`
+3.2.57 and `env bash` resolves to it on a stock Mac, so bash-4isms are fatal
+there. Banned: `${var^^}`/`${var,,}` (case conversion — "bad substitution"
+kills the whole script; this once crash-looped the sidebar the moment a note
+was set, see `bugs/2026-07-06-tmuxopticon-note-crash-bash32.md`), `mapfile`/
+`readarray`, `declare -A`, `|&`, `&>>`. For case-insensitive matching use
+character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
+
 ## Files
 
 - `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `render`,
@@ -83,6 +91,11 @@ don't reach into sibling repo files. One soft exception: it reads the per-pane
 
 ## Architecture notes
 
+- **Each render frame runs in a subshell** (`render` loops `( render_frame )`),
+  so a hard shell error mid-frame (bad substitution, `set -u` unbound var) kills
+  only that frame — the loop paints a red `⚠ render failed` notice and retries —
+  instead of exiting the script and closing the sidebar pane. Keep new
+  frame-time work inside `render_frame`, and don't "simplify" the subshell away.
 - **State lives in tmux options**, not files: `@tmuxopticon-active` (0/1) is the
   global on/off; `-width` / `-interval` are config. Options are read live each
   frame, so config changes apply without a reload.

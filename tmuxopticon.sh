@@ -322,125 +322,143 @@ provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divid
   return 0
 }
 
+render_frame() { # build + paint one frame (called from render, inside a subshell)
+  local w h tw EOL=$'\033[K\n'
+  w="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)"
+  [ -n "$w" ] || w="$(opt @tmuxopticon-width 26)"
+  h="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_height}' 2>/dev/null)"
+  case "$h" in ''|*[!0-9]*) h=40;; esac
+  tw=$(( w - 1 )); [ "$tw" -lt 1 ] && tw=1           # usable text width (no indent)
+  local div; printf -v div '%*s' "$tw" ''; div="${div// /─}"   # per-frame divider rule
+
+  # Status panel (bottom-anchored). Each enabled provider's cache (written by
+  # the cron collector) becomes a box; build them now so we know how many rows
+  # to reserve at the bottom. Order top→bottom: Uptime Robot, Open PRs, Alarms
+  # (alarms sit at the very bottom — closest to the bottom = most visible).
+  local boxlines=() bl bh=0
+  if [ -e "$COLLECTOR_FLAG" ]; then
+    # Collector ON: one box per enabled provider, drawn in registry order (the
+    # manifests' `order` field, low=top — Uptime Robot, Open PRs, then Alarms at
+    # the very bottom, closest to the edge = most visible). provider_box draws
+    # nothing for a provider whose cache doesn't exist yet, so enabled-but-unpulled
+    # stays silent. The registry walk is filesystem-only — no pull.conf sourcing.
+    local pf_order pf_id pf_title pf_flag pf_rest
+    while IFS=$'\037' read -r pf_order pf_id pf_title pf_flag pf_rest; do
+      [ -n "$pf_id" ] && [ -n "$pf_flag" ] || continue
+      pull_enabled "$pf_flag" || continue
+      while IFS= read -r bl; do boxlines+=("$bl"); bh=$((bh + 1)); done < <(provider_box "$pf_title" "$PLUGIN_TMP/$pf_id.cache" "$tw")
+    done < <(provider_rows)
+  else
+    # Collector OFF (the default): nothing is being pulled, so any cached boxes
+    # would only show stale data. Draw one quiet notice instead — re-enable with
+    # providers/collector-start.sh.
+    boxlines+=("${C_DIM}${div}${C_RESET}")
+    boxlines+=("${C_DIM} ⊘ Cron-checker disabled${C_RESET}")
+    bh=2
+  fi
+  if [ "$bh" -gt 0 ]; then          # two blank rows under the lowest box, so the
+    boxlines+=('' ''); bh=$((bh + 2))   # panel doesn't clash with the tmux status bar
+  fi
+  local avail=$h; [ "$bh" -gt 0 ] && avail=$(( h - bh ))
+  [ "$avail" -lt 1 ] && avail=1                       # rows the session list may use
+
+  # --- build the frame + a row->session map, then paint once (no flicker) ---
+  # \033[K clears each line to its end; \033[J clears any leftover rows below.
+  local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
+  cur="$(current_session)"
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    [ "$prow" -ge "$avail" ] && break               # list filled the space above the box
+    idx=$((idx + 1))
+    mark=' '; [ "$s" = "$cur" ] && mark='▶'
+    if [ "$idx" -le 9 ]; then jump="[$idx]"; else jump='[ ]'; fi
+    name="$(session_label "$s")"; [ -n "$name" ] || name="$s"   # friendly name, else raw session
+    # truncate the name to the room *left of* the "▶[N]  " prefix (7 cols on
+    # the active row — mark+jump+chip space+2 gaps — 6 on the rest), so a long
+    # title never overflows the sidebar width and wraps onto the next row.
+    if [ "$s" = "$cur" ]; then                          # make the active session pop
+      nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
+      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${name:0:nb}${C_RESET}"
+    else
+      nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
+      hdr="${mark}${jump}  ${name:0:nb}"
+    fi
+    out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
+    # The session's note ("Next step: …"), right under its name — your own
+    # jotting about where this session is at, so you don't have to read the
+    # Claude wall of text to re-orient. "BLOCK…" notes turn bold red. Notes
+    # are never cut off: wrap_note word-wraps them over as many rows as
+    # needed (a typed "\n" forces a break); continuations indent under the ✎.
+    note="$(session_note "$s")"
+    if [ -n "$note" ]; then
+      # NB: no ${note^^} here — case-conversion is bash 4+, and macOS's
+      # /bin/bash is 3.2, where it's a fatal "bad substitution".
+      case "$note" in [Bb][Ll][Oo][Cc][Kk]*) ncol="$C_BLOCKED";; *) ncol="$C_NOTE";; esac
+      nfirst=1
+      while IFS= read -r nline; do
+        [ "$prow" -ge "$avail" ] && break 2         # no room left before the box
+        if [ "$nfirst" = 1 ]; then npfx=' ✎ '; nfirst=0; else npfx='   '; fi
+        out+="${ncol}${npfx}${nline}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
+      done < <(wrap_note "$note" $(( tw - 3 )))
+    fi
+    # one line per split: "<icon> <label>   <path>" — Claude state for Claude
+    # panes, terminal type (nvim/remote/shell) for the rest.
+    while IFS=$'\t' read -r pidx stat ppath; do
+      [ "$prow" -ge "$avail" ] && break 2           # no room left before the box
+      case "$stat" in
+        working) seg="${C_WORK}● working${C_RESET}";   segp='● working';;
+        waiting) seg="${C_WAIT}◐ waiting${C_RESET}";   segp='◐ waiting';;
+        done)    seg="${C_DONE}○ done${C_RESET}";      segp='○ done';;
+        nvim)    seg="${C_NVIM}N nvim${C_RESET}";       segp='N nvim';;
+        remote)  seg="${C_REMOTE}⇄ remote${C_RESET}";  segp='⇄ remote';;
+        local)   seg="${C_DIM}\$ shell${C_RESET}";     segp='$ shell';;
+        *)       seg=''; segp='';;
+      esac
+      # Lead each pane row with tmux's pane_index (right-aligned in 2 cols) — the
+      # same number `prefix q` flashes and the pane border shows, so a row maps to
+      # an on-screen pane at a glance. nlen=3 accounts for "NN " in the width math.
+      printf -v numpfx '%2s ' "$pidx"
+      if [ -n "$segp" ]; then                           # Claude pane: status column + path
+        col=10; pad=$(( col - ${#segp} )); [ "$pad" -lt 1 ] && pad=1
+        budget=$(( tw - nlen - col )); [ "$budget" -lt 1 ] && budget=1
+        printf -v gap '%*s' "$pad" ''
+        line="${C_DIM}${numpfx}${C_RESET}${seg}${gap}${C_DIM}${ppath:0:budget}${C_RESET}"
+      else                                              # non-Claude pane: just the path
+        budget=$(( tw - nlen )); [ "$budget" -lt 1 ] && budget=1
+        line="${C_DIM}${numpfx}${ppath:0:budget}${C_RESET}"
+      fi
+      out+="${line}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
+    done < <(session_pane_rows "$s")
+    [ "$prow" -ge "$avail" ] && break               # skip the divider if we're out of room
+    out+="${C_DIM}${div}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))  # divider between sessions
+  done < <(ordered_sessions)
+  printf '%s' "$rows" > "$ROWMAP.$$" 2>/dev/null && mv -f "$ROWMAP.$$" "$ROWMAP" 2>/dev/null
+  printf '\033[H%s\033[J' "$out"                     # home, paint, clear list + gap below
+  if [ "$bh" -gt 0 ]; then                           # pin the status box to the bottom rows
+    local boxstart=$(( h - bh + 1 )) boxout='' bi
+    [ "$boxstart" -lt 1 ] && boxstart=1
+    for bi in "${boxlines[@]}"; do boxout+="${bi}"$'\033[K'$'\n'; done
+    printf '\033[%d;1H%s' "$boxstart" "${boxout%$'\n'}"   # no trailing newline -> no scroll
+  fi
+  return 0
+}
+
 render() {
   printf '\033[?25l'                                   # hide cursor
   trap 'printf "\033[?25h\033[2J\033[H"; exit 0' TERM INT HUP
-  local w h tw interval EOL=$'\033[K\n'
+  local interval rc
   while :; do
     interval="$(opt @tmuxopticon-interval 2)"        # read live so changes apply at once
-    w="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)"
-    [ -n "$w" ] || w="$(opt @tmuxopticon-width 26)"
-    h="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_height}' 2>/dev/null)"
-    case "$h" in ''|*[!0-9]*) h=40;; esac
-    tw=$(( w - 1 )); [ "$tw" -lt 1 ] && tw=1           # usable text width (no indent)
-    local div; printf -v div '%*s' "$tw" ''; div="${div// /─}"   # per-frame divider rule
-
-    # Status panel (bottom-anchored). Each enabled provider's cache (written by
-    # the cron collector) becomes a box; build them now so we know how many rows
-    # to reserve at the bottom. Order top→bottom: Uptime Robot, Open PRs, Alarms
-    # (alarms sit at the very bottom — closest to the bottom = most visible).
-    local boxlines=() bl bh=0
-    if [ -e "$COLLECTOR_FLAG" ]; then
-      # Collector ON: one box per enabled provider, drawn in registry order (the
-      # manifests' `order` field, low=top — Uptime Robot, Open PRs, then Alarms at
-      # the very bottom, closest to the edge = most visible). provider_box draws
-      # nothing for a provider whose cache doesn't exist yet, so enabled-but-unpulled
-      # stays silent. The registry walk is filesystem-only — no pull.conf sourcing.
-      local pf_order pf_id pf_title pf_flag pf_rest
-      while IFS=$'\037' read -r pf_order pf_id pf_title pf_flag pf_rest; do
-        [ -n "$pf_id" ] && [ -n "$pf_flag" ] || continue
-        pull_enabled "$pf_flag" || continue
-        while IFS= read -r bl; do boxlines+=("$bl"); bh=$((bh + 1)); done < <(provider_box "$pf_title" "$PLUGIN_TMP/$pf_id.cache" "$tw")
-      done < <(provider_rows)
-    else
-      # Collector OFF (the default): nothing is being pulled, so any cached boxes
-      # would only show stale data. Draw one quiet notice instead — re-enable with
-      # providers/collector-start.sh.
-      boxlines+=("${C_DIM}${div}${C_RESET}")
-      boxlines+=("${C_DIM} ⊘ Cron-checker disabled${C_RESET}")
-      bh=2
-    fi
-    if [ "$bh" -gt 0 ]; then          # two blank rows under the lowest box, so the
-      boxlines+=('' ''); bh=$((bh + 2))   # panel doesn't clash with the tmux status bar
-    fi
-    local avail=$h; [ "$bh" -gt 0 ] && avail=$(( h - bh ))
-    [ "$avail" -lt 1 ] && avail=1                       # rows the session list may use
-
-    # --- build the frame + a row->session map, then paint once (no flicker) ---
-    # \033[K clears each line to its end; \033[J clears any leftover rows below.
-    local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
-    cur="$(current_session)"
-    while IFS= read -r s; do
-      [ -n "$s" ] || continue
-      [ "$prow" -ge "$avail" ] && break               # list filled the space above the box
-      idx=$((idx + 1))
-      mark=' '; [ "$s" = "$cur" ] && mark='▶'
-      if [ "$idx" -le 9 ]; then jump="[$idx]"; else jump='[ ]'; fi
-      name="$(session_label "$s")"; [ -n "$name" ] || name="$s"   # friendly name, else raw session
-      # truncate the name to the room *left of* the "▶[N]  " prefix (7 cols on
-      # the active row — mark+jump+chip space+2 gaps — 6 on the rest), so a long
-      # title never overflows the sidebar width and wraps onto the next row.
-      if [ "$s" = "$cur" ]; then                          # make the active session pop
-        nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
-        hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${name:0:nb}${C_RESET}"
-      else
-        nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
-        hdr="${mark}${jump}  ${name:0:nb}"
-      fi
-      out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
-      # The session's note ("Next step: …"), right under its name — your own
-      # jotting about where this session is at, so you don't have to read the
-      # Claude wall of text to re-orient. "BLOCK…" notes turn bold red. Notes
-      # are never cut off: wrap_note word-wraps them over as many rows as
-      # needed (a typed "\n" forces a break); continuations indent under the ✎.
-      note="$(session_note "$s")"
-      if [ -n "$note" ]; then
-        case "${note^^}" in BLOCK*) ncol="$C_BLOCKED";; *) ncol="$C_NOTE";; esac
-        nfirst=1
-        while IFS= read -r nline; do
-          [ "$prow" -ge "$avail" ] && break 2         # no room left before the box
-          if [ "$nfirst" = 1 ]; then npfx=' ✎ '; nfirst=0; else npfx='   '; fi
-          out+="${ncol}${npfx}${nline}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
-        done < <(wrap_note "$note" $(( tw - 3 )))
-      fi
-      # one line per split: "<icon> <label>   <path>" — Claude state for Claude
-      # panes, terminal type (nvim/remote/shell) for the rest.
-      while IFS=$'\t' read -r pidx stat ppath; do
-        [ "$prow" -ge "$avail" ] && break 2           # no room left before the box
-        case "$stat" in
-          working) seg="${C_WORK}● working${C_RESET}";   segp='● working';;
-          waiting) seg="${C_WAIT}◐ waiting${C_RESET}";   segp='◐ waiting';;
-          done)    seg="${C_DONE}○ done${C_RESET}";      segp='○ done';;
-          nvim)    seg="${C_NVIM}N nvim${C_RESET}";       segp='N nvim';;
-          remote)  seg="${C_REMOTE}⇄ remote${C_RESET}";  segp='⇄ remote';;
-          local)   seg="${C_DIM}\$ shell${C_RESET}";     segp='$ shell';;
-          *)       seg=''; segp='';;
-        esac
-        # Lead each pane row with tmux's pane_index (right-aligned in 2 cols) — the
-        # same number `prefix q` flashes and the pane border shows, so a row maps to
-        # an on-screen pane at a glance. nlen=3 accounts for "NN " in the width math.
-        printf -v numpfx '%2s ' "$pidx"
-        if [ -n "$segp" ]; then                           # Claude pane: status column + path
-          col=10; pad=$(( col - ${#segp} )); [ "$pad" -lt 1 ] && pad=1
-          budget=$(( tw - nlen - col )); [ "$budget" -lt 1 ] && budget=1
-          printf -v gap '%*s' "$pad" ''
-          line="${C_DIM}${numpfx}${C_RESET}${seg}${gap}${C_DIM}${ppath:0:budget}${C_RESET}"
-        else                                              # non-Claude pane: just the path
-          budget=$(( tw - nlen )); [ "$budget" -lt 1 ] && budget=1
-          line="${C_DIM}${numpfx}${ppath:0:budget}${C_RESET}"
-        fi
-        out+="${line}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
-      done < <(session_pane_rows "$s")
-      [ "$prow" -ge "$avail" ] && break               # skip the divider if we're out of room
-      out+="${C_DIM}${div}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))  # divider between sessions
-    done < <(ordered_sessions)
-    printf '%s' "$rows" > "$ROWMAP.$$" 2>/dev/null && mv -f "$ROWMAP.$$" "$ROWMAP" 2>/dev/null
-    printf '\033[H%s\033[J' "$out"                     # home, paint, clear list + gap below
-    if [ "$bh" -gt 0 ]; then                           # pin the status box to the bottom rows
-      local boxstart=$(( h - bh + 1 )) boxout='' bi
-      [ "$boxstart" -lt 1 ] && boxstart=1
-      for bi in "${boxlines[@]}"; do boxout+="${bi}"$'\033[K'$'\n'; done
-      printf '\033[%d;1H%s' "$boxstart" "${boxout%$'\n'}"   # no trailing newline -> no scroll
+    # Each frame runs in a subshell so a hard shell error (bad substitution,
+    # set -u on an unbound var, a syntax-level surprise in odd input) kills
+    # only that frame, not this loop — a crash used to close the sidebar pane
+    # outright. On failure, paint the error where the frame would have gone
+    # and keep ticking; the next frame gets a fresh try.
+    ( render_frame ); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '\033[H%s\033[K\n%s\033[K\n\033[J' \
+        "${C_ALERT} ⚠ render failed (exit ${rc}) ${C_RESET}" \
+        "${C_DIM} retrying every ${interval}s…${C_RESET}"
     fi
     sleep "$interval"
   done
