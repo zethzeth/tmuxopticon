@@ -3,7 +3,9 @@
 # at once: split counts and live Claude Code status (working / waiting / done).
 #
 # Single file, no daemon. Subcommands:
-#   toggle      open the sidebar pane (left) in the current window, or close it
+#   toggle      open the sidebar pane (left) in the current window — plus the
+#               full `reset` fix (warm every session, snap widths) so cycling
+#               sessions afterwards doesn't flash — or close it everywhere
 #   ensure      open the sidebar in the current window if globally active
 #               (fired from tmux hooks so the drawer follows the focused window)
 #   reset       open the sidebar in every session's active window (no focus
@@ -556,6 +558,10 @@ toggle() { # global on/off switch
   else
     tmux set-option -g @tmuxopticon-active 1
     [ -z "$(in_current_window)" ] && open_here
+    # Toggling on applies the full `prefix O` fix by itself: warm every other
+    # session's active window (so cycling sessions later doesn't flash a fresh
+    # split) and snap all sidebars to the configured width.
+    reset_width
   fi
 }
 
@@ -632,7 +638,9 @@ plain  per split:  ${C_NVIM}N nvim${C_RESET}   ${C_REMOTE}⇄ remote${C_RESET}  
 prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Sidebar${C_RESET}
-    prefix o          toggle the sidebar on/off (global)
+    prefix o          toggle the sidebar on/off (global) — turning it on also
+                      opens it in every other session, so cycling sessions
+                      won't flash a fresh split
     prefix O          fix the sidebar everywhere: open it in every session
                       (pre-paying the first-visit flash) and snap them all
                       back to the configured width (after docking, monitor

@@ -20,7 +20,8 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
 
 ## Files
 
-- `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `reset`
+- `tmuxopticon.sh` — all the logic. Subcommands: `toggle` (on-toggle also runs
+  the full `reset` fix, so a fresh open warms every session), `ensure`, `reset`
   (fix the sidebar everywhere — open it in every session's active window
   without moving focus, skipping zoomed windows, then snap every sidebar pane
   back to `@tmuxopticon-width` — bound to `prefix O`), `render`,

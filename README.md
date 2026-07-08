@@ -97,7 +97,7 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 
 | Binding          | Action                                            |
 | ---------------- | ------------------------------------------------- |
-| `prefix o`       | Toggle the sidebar on/off (global)                |
+| `prefix o`       | Toggle the sidebar on/off (global; on = opened in every session) |
 | `prefix O`       | Fix the sidebar everywhere: open in every session + reset widths |
 | `prefix 1`…`9`   | Jump to the Nth session in the list               |
 | `prefix n` / `p` | Next / previous session in the list (wraps)       |
@@ -137,7 +137,9 @@ widths. `prefix O` (or `tmuxopticon.sh reset` from a shell) fixes the sidebar
 everywhere in one go: it opens the sidebar in every session's active window
 that lacks one (without moving your focus — so the "first visit opens a fresh
 pane" flash is pre-paid; zoomed windows are left alone), then snaps every
-sidebar pane back to `@tmuxopticon-width`.
+sidebar pane back to `@tmuxopticon-width`. Toggling the sidebar on with
+`prefix o` runs the same fix automatically, so a fresh open is already
+flash-free across sessions.
 
 The render loop also listens for pane resizes (`SIGWINCH`) and repaints
 immediately, so landing in a freshly re-sized session shows a correct frame
