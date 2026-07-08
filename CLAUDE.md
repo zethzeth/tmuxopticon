@@ -21,8 +21,9 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
 ## Files
 
 - `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `reset`
-  (snap every sidebar pane back to `@tmuxopticon-width` after a client resize
-  skewed it — bound to `prefix O`), `render`,
+  (fix the sidebar everywhere — open it in every session's active window
+  without moving focus, skipping zoomed windows, then snap every sidebar pane
+  back to `@tmuxopticon-width` — bound to `prefix O`), `render`,
   `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping), `click Y`,
   `kill N`, `killcur` (kill the current session after hopping to the next one,
   wrapping, so the client isn't detached), `help` (`-h`/`--help`). No daemon; the redraw
@@ -98,6 +99,11 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   only that frame — the loop paints a red `⚠ render failed` notice and retries —
   instead of exiting the script and closing the sidebar pane. Keep new
   frame-time work inside `render_frame`, and don't "simplify" the subshell away.
+- **The render nap is `sleep … & wait`, not a plain `sleep`** — deliberately.
+  `render` traps WINCH to repaint immediately on a pane resize, and bash only
+  runs a trap after the foreground command finishes; `wait` returns the moment
+  the signal lands. Folding it back into a foreground `sleep` silently breaks
+  the instant-repaint-on-resize behavior.
 - **State lives in tmux options**, not files: `@tmuxopticon-active` (0/1) is the
   global on/off; `-width` / `-interval` are config. Options are read live each
   frame, so config changes apply without a reload.

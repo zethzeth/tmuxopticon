@@ -6,6 +6,9 @@
 #   toggle      open the sidebar pane (left) in the current window, or close it
 #   ensure      open the sidebar in the current window if globally active
 #               (fired from tmux hooks so the drawer follows the focused window)
+#   reset       open the sidebar in every session's active window (no focus
+#               change) + snap every sidebar back to @tmuxopticon-width —
+#               the "fix it everywhere" command after a monitor change
 #   render      the redraw loop (runs inside the sidebar pane; not called by hand)
 #   jump  <N>   switch to the Nth session as listed in the sidebar (1-based)
 #   click <Y>   switch to the session on pane row Y (used by the mouse binding)
@@ -446,7 +449,13 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
 render() {
   printf '\033[?25l'                                   # hide cursor
   trap 'printf "\033[?25h\033[2J\033[H"; exit 0' TERM INT HUP
-  local interval rc
+  # A pane resize (monitor swap, switching to a session whose background window
+  # gets re-sized to the client, a manual drag) delivers WINCH: repaint right
+  # away instead of letting tmux's reflow of the old frame sit garbled for up
+  # to a full interval. The trap body is a no-op — its mere arrival makes the
+  # `wait` below return early, and the loop paints a fresh frame.
+  trap ':' WINCH
+  local interval rc napper
   while :; do
     interval="$(opt @tmuxopticon-interval 2)"        # read live so changes apply at once
     # Each frame runs in a subshell so a hard shell error (bad substitution,
@@ -460,7 +469,13 @@ render() {
         "${C_ALERT} ⚠ render failed (exit ${rc}) ${C_RESET}" \
         "${C_DIM} retrying every ${interval}s…${C_RESET}"
     fi
-    sleep "$interval"
+    # Nap via background sleep + wait, NOT a plain foreground sleep: bash only
+    # runs a trap after the foreground command finishes, so a plain sleep would
+    # swallow the WINCH until the tick ended. `wait` returns the moment a
+    # trapped signal lands; the leftover sleep is reaped so they can't pile up.
+    sleep "$interval" & napper=$!
+    wait "$napper" 2>/dev/null
+    kill "$napper" 2>/dev/null || true
   done
 }
 
@@ -487,10 +502,38 @@ kill_everywhere() { # remove every sidebar pane across all sessions/windows
     | while IFS= read -r p; do tmux kill-pane -t "$p" 2>/dev/null || true; done
 }
 
-reset_width() { # snap every sidebar pane back to @tmuxopticon-width.
+warm_everywhere() { # open the sidebar in every session's active window, focus untouched
+  # Pre-pays the "first visit splits a fresh pane" flash: after this, cycling
+  # sessions lands on sidebars that are already rendering. split-window -d
+  # keeps the client where it is; zoomed windows are skipped (unzooming a
+  # deliberately zoomed pane from the background would be rude — `ensure`
+  # handles those on arrival, as it always has).
+  sidebar_active || return 0
+  local width sess have zoomed prev new
+  width="$(opt @tmuxopticon-width 26)"
+  while IFS= read -r sess; do
+    [ -n "$sess" ] || continue
+    zoomed="$(tmux display-message -p -t "=$sess:" '#{window_zoomed_flag}' 2>/dev/null)"
+    [ "$zoomed" = 1 ] && continue
+    have="$(tmux list-panes -t "=$sess:" -F '#{pane_id} #{pane_title}' 2>/dev/null \
+      | awk -v t="$SIDEBAR_TITLE" '$2 == t { print $1; exit }')"
+    [ -n "$have" ] && continue
+    prev="$(tmux display-message -p -t "=$sess:" '#{pane_id}' 2>/dev/null)"
+    new="$(tmux split-window -dfhb -l "$width" -t "=$sess:" -P -F '#{pane_id}' "exec '$SELF' render" 2>/dev/null)" || continue
+    [ -n "$new" ] || continue
+    # select-pane -T selects the pane as a side effect of titling it, so put
+    # the window's active pane back where it was.
+    tmux select-pane -t "$new" -T "$SIDEBAR_TITLE" 2>/dev/null
+    [ -n "$prev" ] && tmux select-pane -t "$prev" 2>/dev/null
+  done < <(ordered_sessions)
+  return 0
+}
+
+reset_width() { # warm every session, then snap every sidebar to @tmuxopticon-width.
   # Client resizes (docking, projector, monitor swap) make tmux rescale panes
   # proportionally, so the sidebar drifts from its configured width. The render
   # loop re-reads pane_width every tick, so resizing alone is a full refresh.
+  warm_everywhere
   local width; width="$(opt @tmuxopticon-width 26)"
   tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
     | awk -v t="$SIDEBAR_TITLE" '$2 == t { print $1 }' \
@@ -590,8 +633,10 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Sidebar${C_RESET}
     prefix o          toggle the sidebar on/off (global)
-    prefix O          reset every sidebar to its configured width (after
-                      docking, monitor swaps, projector meetings…)
+    prefix O          fix the sidebar everywhere: open it in every session
+                      (pre-paying the first-visit flash) and snap them all
+                      back to the configured width (after docking, monitor
+                      swaps, projector meetings…)
     click a row       jump to that session
     pane numbers      each split row is led by its tmux pane number —
                       the same one ${C_BOLD}prefix q${C_RESET} flashes and the pane border shows
