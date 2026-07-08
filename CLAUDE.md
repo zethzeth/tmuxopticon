@@ -20,7 +20,9 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
 
 ## Files
 
-- `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `render`,
+- `tmuxopticon.sh` — all the logic. Subcommands: `toggle`, `ensure`, `reset`
+  (snap every sidebar pane back to `@tmuxopticon-width` after a client resize
+  skewed it — bound to `prefix O`), `render`,
   `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping), `click Y`,
   `kill N`, `killcur` (kill the current session after hopping to the next one,
   wrapping, so the client isn't detached), `help` (`-h`/`--help`). No daemon; the redraw

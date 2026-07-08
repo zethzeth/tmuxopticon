@@ -98,6 +98,7 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 | Binding          | Action                                            |
 | ---------------- | ------------------------------------------------- |
 | `prefix o`       | Toggle the sidebar on/off (global)                |
+| `prefix O`       | Reset every sidebar to `@tmuxopticon-width`       |
 | `prefix 1`…`9`   | Jump to the Nth session in the list               |
 | `prefix n` / `p` | Next / previous session in the list (wraps)       |
 | click a row      | Jump to that session                              |
@@ -129,6 +130,11 @@ panel* below).
 The sidebar opens at `@tmuxopticon-width` columns. You can resize the pane
 interactively at any time; the new width is local to that pane and isn't
 propagated to other sessions.
+
+Client resizes — docking, unplugging a monitor, projecting in a meeting —
+make tmux rescale panes proportionally, which can leave sidebars at odd
+widths. `prefix O` (or `tmuxopticon.sh reset` from a shell) snaps every
+sidebar pane in every session back to `@tmuxopticon-width`.
 
 ## How status is detected
 

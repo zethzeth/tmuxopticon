@@ -47,6 +47,11 @@ esac
 # Toggle the left sidebar on/off (global switch)
 tmux bind o run-shell "'$SCRIPT' toggle"
 
+# Reset every sidebar pane (all sessions) back to @tmuxopticon-width —
+# for when a client resize (docking, monitor swap, projector) has made
+# tmux rescale the sidebar to some odd width.
+tmux bind O run-shell "'$SCRIPT' reset"
+
 # Name the current SESSION (persists, shows in the sidebar and in 'prefix s')
 tmux bind t command-prompt -p "session name:" "rename-session '%%'"
 

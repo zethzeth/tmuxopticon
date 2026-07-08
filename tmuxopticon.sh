@@ -487,6 +487,16 @@ kill_everywhere() { # remove every sidebar pane across all sessions/windows
     | while IFS= read -r p; do tmux kill-pane -t "$p" 2>/dev/null || true; done
 }
 
+reset_width() { # snap every sidebar pane back to @tmuxopticon-width.
+  # Client resizes (docking, projector, monitor swap) make tmux rescale panes
+  # proportionally, so the sidebar drifts from its configured width. The render
+  # loop re-reads pane_width every tick, so resizing alone is a full refresh.
+  local width; width="$(opt @tmuxopticon-width 26)"
+  tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
+    | awk -v t="$SIDEBAR_TITLE" '$2 == t { print $1 }' \
+    | while IFS= read -r p; do tmux resize-pane -t "$p" -x "$width" 2>/dev/null || true; done
+}
+
 ensure() { # ensure the sidebar exists in the current window, if globally active.
   # Fired from tmux hooks on every window/session change so the drawer follows
   # the focused window. No-op when inactive or already present, so it's cheap
@@ -580,6 +590,8 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Sidebar${C_RESET}
     prefix o          toggle the sidebar on/off (global)
+    prefix O          reset every sidebar to its configured width (after
+                      docking, monitor swaps, projector meetings…)
     click a row       jump to that session
     pane numbers      each split row is led by its tmux pane number —
                       the same one ${C_BOLD}prefix q${C_RESET} flashes and the pane border shows
@@ -626,6 +638,7 @@ cmd="${1:-toggle}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   toggle) toggle;;
   ensure) ensure;;
+  reset)  reset_width;;
   render) render;;
   jump)   jump "${1:-}";;
   next)   step 1;;
@@ -634,5 +647,5 @@ case "$cmd" in
   kill)   killn "${1:-}";;
   killcur) killcur;;
   help|-h|--help) help;;
-  *) printf 'usage: %s {toggle|ensure|render|jump N|next|prev|click Y|kill N|killcur|help}\n' "$SELF" >&2; exit 2;;
+  *) printf 'usage: %s {toggle|ensure|reset|render|jump N|next|prev|click Y|kill N|killcur|help}\n' "$SELF" >&2; exit 2;;
 esac
