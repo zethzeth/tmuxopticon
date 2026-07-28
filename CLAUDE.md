@@ -25,7 +25,9 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   (fix the sidebar everywhere — open it in every session's active window
   without moving focus, skipping zoomed windows, then snap every sidebar pane
   back to `@tmuxopticon-width` — bound to `prefix O`), `render`,
-  `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping), `click Y`,
+  `jump N`, `next`/`prev` (cycle sessions in sidebar order, wrapping),
+  `move up|down|reset` (hand-reorder the current session — bound to `prefix
+  Up`/`prefix Down`), `click Y`,
   `kill N`, `killcur` (kill the current session after hopping to the next one,
   wrapping, so the client isn't detached), `help` (`-h`/`--help`). No daemon; the redraw
   loop (`render`) runs *inside* the sidebar pane itself. `help` prints the key
@@ -118,6 +120,31 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   file store: the note survives renames (options ride
   the session, not its name) and dies with the session — matching the lifetime
   of a "Next step: …" jotting.
+- **Session order is one function, `ordered_sessions`** — render, `jump N`,
+  `kill N`, the click row-map and `next`/`prev` all read it, which is why
+  reordering the list renumbers everything for free. It sorts on two keys: the
+  per-session option `@tmuxopticon-order` (the manual rank, written by `move`),
+  then `#{session_created}`. An unranked session gets `RANK_UNSET` (9999999), so
+  sessions you've never moved sort *below* the ones you have, in creation order —
+  a new session lands at the bottom instead of in the middle of a hand-made
+  grouping, and with nobody ranked the behaviour is the original pure
+  creation-order list. Fields are **tab**-separated (session names contain
+  spaces) and the awk pass rewrites only field 1 via `sub()` on `$0`, so a name
+  is never re-split; `cut -f3-` returns the remainder verbatim.
+- **`move` renumbers the whole list, not just the swapped pair.** After any move
+  every session carries an explicit 1..N rank. That's deliberate: it collapses a
+  mixed ranked/unranked list into a single explicit order, so the next move has a
+  clean baseline instead of fighting `RANK_UNSET`. `move` does not wrap at the
+  ends (unlike `next`/`prev`) — the keys are `-r` repeatable, and a wrap would let
+  a held key teleport a session end-to-end. `move reset` unsets every rank.
+- **`move` never does nothing silently.** A no-op at the ends `display-message`s
+  "already at the top/bottom (#i of N)", and a *successful* move reports where
+  the session landed when the sidebar is closed (`sidebar_active ||`) — with the
+  sidebar open the list itself is the feedback, so staying quiet there keeps a
+  repeated key from spamming the status line. This isn't decoration: a silent
+  no-op on a fresh keybinding is indistinguishable from a broken keybinding, and
+  in a 2-session list an even number of swaps looks exactly like nothing
+  happened.
 - **The drawer follows focus** via `after-select-window` / `after-new-window` /
   `client-session-changed` hooks, each calling `ensure` (a cheap no-op when
   inactive or already present). Don't add a daemon to do this.

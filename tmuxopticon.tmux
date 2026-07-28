@@ -102,5 +102,18 @@ tmux bind n run-shell "'$SCRIPT' next"
 tmux bind p run-shell "'$SCRIPT' prev"
 tmux bind N run-shell "'$SCRIPT' prev"
 
+# Reorder the list: move the CURRENT session up/down one row, so sessions can be
+# grouped by hand (both Dotfiles together, both Brapi together) instead of by
+# when they were opened. The numbering follows — everything numbered reads the
+# same canonical order. '-r' makes them repeatable, so one prefix then ↑↑↑ walks
+# a session several rows up (within tmux's repeat-time, default 500ms).
+#
+# This repurposes tmux's default 'prefix Up'/'prefix Down' (select-pane -U/-D).
+# Panes stay reachable with 'prefix ;' / 'prefix o'... which tmuxopticon also
+# takes — so bind your own vim-style pane keys (bind k select-pane -U, etc.), or
+# opt out of the default keys entirely.
+tmux bind -r Up   run-shell "'$SCRIPT' move up"
+tmux bind -r Down run-shell "'$SCRIPT' move down"
+
 # Click a session row in the sidebar to switch to it
 tmux bind -n MouseDown1Pane if-shell -F -t '=' '#{==:#{pane_title},tmuxopticon}' "run-shell \"'$SCRIPT' click #{mouse_y}\"" "select-pane -t '=' ; send -M"

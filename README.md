@@ -46,6 +46,20 @@ $ shell   ~/scratch
 - **Jump anywhere.** `prefix 1`…`prefix 9` switches to the Nth listed session;
   clicking a session's row does the same. `prefix n` / `prefix p` cycles to the
   next / previous session in the list, wrapping at the ends.
+- **Order the list by hand.** `prefix ↑` / `prefix ↓` moves the *current*
+  session one row up or down, so related sessions can sit next to each other
+  instead of in the order you happened to open them (both `dotfiles` sessions
+  together, both `brapi` ones together). The jump numbers follow the new order —
+  there's nothing separate to renumber. Repeatable: one `prefix`, then `↑↑↑`.
+  No wrap at the ends — but the key never *silently* does nothing: at the top or
+  bottom it says so in the status line (`'Brapi' is already at the top (#1 of
+  2)`), and a successful move made with the sidebar closed reports where the
+  session landed. Sessions you've never moved keep sorting by creation time
+  *below* the ones you have, so a new session appears at the bottom rather than
+  landing in the middle of your grouping. Stored per session in
+  `@tmuxopticon-order` (survives renames, dies with the session); run
+  `tmuxopticon.sh move reset` to drop the manual order and go back to pure
+  creation order.
 - **Name & cull sessions.** `prefix t` renames the current session; `prefix K`
   opens a kill table (`prefix K 3` kills #3, `prefix K K` kills the current
   session and hops to the next one — wrapping — instead of detaching you,
@@ -102,11 +116,18 @@ Reload tmux (`prefix : source-file ~/.tmux.conf`) and hit `prefix o`.
 | `prefix 1`…`9`   | Jump to the Nth session in the list               |
 | `prefix n` / `p` | Next / previous session in the list (wraps)       |
 | click a row      | Jump to that session                              |
+| `prefix ↑` / `↓` | Move the current session up / down one row (repeatable, no wrap) |
 | `prefix t`       | Rename the current session                        |
 | `prefix m`       | Set/edit the session's note (empty clears; `\n` = line break) |
 | `prefix K` `N`   | Kill the Nth session (with confirm)               |
 | `prefix K` `K`   | Kill the current session (with confirm)           |
 | `prefix K` `a`   | Kill ALL sessions except the current (with confirm) |
+
+These take over some tmux defaults — `prefix n`/`p` (next/previous-window),
+`prefix m` (mark-pane), and `prefix ↑`/`↓` (select-pane up/down). Windows stay
+reachable with `prefix w` / `prefix l`; for panes, bind your own (`bind k
+select-pane -U`, `bind j select-pane -D`, …) or set
+`@tmuxopticon-default-keys 'off'` and wire every subcommand yourself.
 
 ## Options
 

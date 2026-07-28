@@ -13,6 +13,10 @@
 #               the "fix it everywhere" command after a monitor change
 #   render      the redraw loop (runs inside the sidebar pane; not called by hand)
 #   jump  <N>   switch to the Nth session as listed in the sidebar (1-based)
+#   move  <up|down|reset>
+#               reorder the current session in the list — swap it with the row
+#               above/below (no wrap at the ends), renumbering as it goes;
+#               `reset` drops the manual order and reverts to creation order
 #   click <Y>   switch to the session on pane row Y (used by the mouse binding)
 #   kill  <N>   kill the Nth session, with a y/n confirm
 #   killcur     kill the current session after hopping to the next one
@@ -37,6 +41,9 @@ export LC_ALL="${LC_ALL:-en_US.UTF-8}"   # char-accurate truncation of UTF-8 gly
 SIDEBAR_TITLE='tmuxopticon'
 HEADER_ROWS=0   # no header; the first session block starts at row 0
 BLOCK_ROWS=5    # rows per session block: jump / title / status / branch / blank
+TAB=$'\t'       # field separator for ordered_sessions (names may contain spaces)
+RANK_UNSET=9999999  # sort key for a session with no manual @tmuxopticon-order —
+                    # big enough that unmoved sessions always sit below ranked ones
 
 # colours (SGR): status coloured by state, branch dimmed
 C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
@@ -96,14 +103,27 @@ apply_host_aliases() { # rewrite ugly hostnames in a path via @tmuxopticon-host-
   printf '%s' "$p"
 }
 
-ordered_sessions() { # canonical order, shared by render / jump / click
-  # Oldest-first, so a freshly created session lands at the *bottom* of the
-  # sidebar instead of jumping to the top. tmux's default list order is
-  # alphabetical by name, which floats new auto-numbered sessions (0, 1, …) up;
-  # sorting by #{session_created} (a UNIX timestamp) gives stable creation order.
-  tmux list-sessions -F '#{session_created} #{session_name}' 2>/dev/null \
-    | sort -n -s -k1,1 \
-    | sed 's/^[0-9]* //'
+ordered_sessions() { # canonical order, shared by render / jump / click / move
+  # Two-key sort: the manual rank first, creation time second.
+  #
+  # Manual rank is the per-session option @tmuxopticon-order, written by `move`
+  # (prefix Up/Down). A session nobody has moved carries no rank and sorts under
+  # RANK_UNSET — i.e. below every ranked one, in creation order among its peers.
+  # So a brand-new session still appears at the *bottom* of a hand-sorted list,
+  # which is where a new session belongs.
+  #
+  # With nobody ranked this degrades to pure oldest-first, the original
+  # behaviour. (tmux's own list order is alphabetical by name, which floats
+  # freshly auto-numbered sessions (0, 1, …) to the top — hence sorting here.)
+  #
+  # Fields are TAB-separated because session names may contain spaces. The awk
+  # pass rewrites *only* field 1, in place on $0, and `cut -f3-` returns the
+  # rest of the line verbatim — so a name is never re-split or truncated.
+  tmux list-sessions -F "#{@tmuxopticon-order}${TAB}#{session_created}${TAB}#{session_name}" 2>/dev/null \
+    | awk -F"$TAB" -v unranked="$RANK_UNSET" \
+        '{ if ($1 !~ /^[0-9]+$/) sub(/^[^\t]*/, unranked); print }' \
+    | sort -t"$TAB" -k1,1n -k2,2n \
+    | cut -f3-
 }
 
 split_count() { # split_count <session> -> pane count excluding the sidebar itself
@@ -589,6 +609,68 @@ step() { # step <1|-1>  next/prev session in the sidebar's canonical order, wrap
   return 0
 }
 
+move() { # move <up|down|reset>  reorder the CURRENT session in the sidebar list
+  # Swaps the current session with its neighbour above/below, so the list can be
+  # grouped by hand ("both Dotfiles sessions together") instead of by when each
+  # was opened. The jump numbers follow automatically: everything numbered —
+  # `jump N`, `kill N`, the row map behind mouse clicks, next/prev — reads
+  # ordered_sessions, so there is no separate numbering to fix up.
+  #
+  # The order is stored per session in @tmuxopticon-order, so it rides the
+  # session (surviving renames) and dies with it — same lifetime as a note.
+  local dir="${1:-}" cur list n idx tgt i s rank edge
+  case "$dir" in
+    up)   dir=-1;;
+    down) dir=1;;
+    reset)  # drop every rank -> straight back to creation order
+      while IFS= read -r s; do
+        [ -n "$s" ] && tmux set-option -t "$s" -u @tmuxopticon-order 2>/dev/null
+      done <<EOF
+$(ordered_sessions)
+EOF
+      return 0;;
+    *) return 0;;
+  esac
+  cur="$(current_session)"
+  [ -n "$cur" ] || return 0
+  list="$(ordered_sessions)"
+  n="$(printf '%s\n' "$list" | grep -c .)"
+  [ "$n" -gt 1 ] && edge='' || edge='only session'
+  idx="$(printf '%s\n' "$list" | grep -nxF -- "$cur" | cut -d: -f1)"
+  [ -n "$idx" ] || return 0
+  tgt=$((idx + dir))
+  # Deliberately NO wrap (unlike next/prev): at the ends this is a no-op, so
+  # leaning on the key can't teleport a session from top to bottom unnoticed.
+  # But a silent no-op reads as "the keybinding is broken" — so SAY so. Same for
+  # a successful move made while the sidebar is off, where there's nothing on
+  # screen to show it landed. Rule: this key never does nothing without a word.
+  [ "$tgt" -ge 1 ] || edge='already at the top'
+  [ "$tgt" -le "$n" ] || edge='already at the bottom'
+  if [ -n "$edge" ]; then
+    tmux display-message "tmuxopticon: '$cur' is $edge (#$idx of $n)"
+    return 0
+  fi
+  # Renumber the WHOLE list to its current positions (1..N), swapping the two
+  # rows as we go. Ranking every session — not just the pair — is what collapses
+  # a mixed ranked/unranked list into one explicit order, so the next move has a
+  # clean baseline. The render loop picks it up on its next tick (~1s).
+  i=0
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    i=$((i + 1))
+    rank=$i
+    [ "$i" -eq "$idx" ] && rank=$tgt
+    [ "$i" -eq "$tgt" ] && rank=$idx
+    tmux set-option -t "$s" @tmuxopticon-order "$rank"
+  done <<EOF
+$list
+EOF
+  # With the sidebar open the list itself is the feedback; with it closed there
+  # would be nothing at all to see, so say where the session landed.
+  sidebar_active || tmux display-message "tmuxopticon: '$cur' moved to #$tgt of $n"
+  return 0
+}
+
 click() { # click <Y>  (0-based pane row); resolve the session via the row map
   local y="${1:-}" idx
   case "$y" in ''|*[!0-9]*) return 0;; esac
@@ -653,6 +735,14 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
     prefix 1 … 9      jump to the Nth session in the list
     prefix n / p      next / previous session in the list (wraps)
 
+  ${C_BOLD}Order${C_RESET}
+    prefix ↑ / ↓      move the CURRENT session up/down one row in the list, so
+                      related sessions can sit together instead of in the order
+                      you happened to open them. The jump numbers follow along.
+                      Repeatable (hold the key after one prefix); no wrap at the
+                      ends. Unmoved sessions stay in creation order at the
+                      bottom. ${C_DIM}tmuxopticon.sh move reset${C_RESET} clears the manual order.
+
   ${C_BOLD}Sessions${C_RESET}
     prefix t          rename the current session
     prefix m          set/edit the session's note (${C_NOTE}✎${C_RESET} under its name in
@@ -697,8 +787,9 @@ case "$cmd" in
   next)   step 1;;
   prev)   step -1;;
   click)  click "${1:-}";;
+  move)   move "${1:-}";;
   kill)   killn "${1:-}";;
   killcur) killcur;;
   help|-h|--help) help;;
-  *) printf 'usage: %s {toggle|ensure|reset|render|jump N|next|prev|click Y|kill N|killcur|help}\n' "$SELF" >&2; exit 2;;
+  *) printf 'usage: %s {toggle|ensure|reset|render|jump N|next|prev|move up|down|reset|click Y|kill N|killcur|help}\n' "$SELF" >&2; exit 2;;
 esac
