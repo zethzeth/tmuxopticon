@@ -29,6 +29,8 @@
 #   timeout       hard per-pull timeout in seconds                 (default: 45)
 #   throttle_min  minutes to wait between pulls, 0 = every run     (default: 0)
 #   max_lines     detail lines the box may draw before "+N more"   (default: 6)
+#                 0 = no cap, draw them all — right for a provider whose output
+#                 is a bounded table, where hiding rows loses half the meaning.
 #                 Raise it for a provider that is a small table rather than a
 #                 headline plus a few notes (see providers/machine). Costs
 #                 sidebar height: render reserves every box row and caps the

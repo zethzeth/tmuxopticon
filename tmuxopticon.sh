@@ -340,6 +340,10 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
   local title="$1" cache="$2" tw="$3" max="${4:-6}"
   [ -r "$cache" ] || return 0          # enabled but nothing pulled yet -> stay quiet
   case "$max" in ''|*[!0-9]*) max=6;; esac   # manifest `max_lines`, sanitised
+  # max_lines=0 means NO cap: draw every detail line, never "+N more". For a
+  # provider whose output is a bounded table (the Machine box), truncating is
+  # always wrong — the hidden rows are as load-bearing as the shown ones, and
+  # "+5 more" in a box you can't expand is just a worse version of the data.
   local stale now epoch state summary line details=() idx=0 shown=0 div age icon col bar pad staleline synctime
   stale="$(opt @tmuxopticon-provider-stale 180)"       # cron refreshes ~every 60s; flag if cold
   printf -v div '%*s' "$tw" ''; div="${div// /─}"
@@ -368,7 +372,7 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
     bline "⚠ ${title} — ERROR"
     bline "⚠ ${summary}"
     for line in "${details[@]}"; do                              # details, still on red
-      [ "$shown" -ge "$max" ] && break
+      [ "$max" -gt 0 ] && [ "$shown" -ge "$max" ] && break
       [ -n "$line" ] && bline "  ${line}"; shown=$((shown + 1))
     done
     printf '%s\n' "${C_ALERTBAR}${bar}${C_RESET}"                 # bottom bar
@@ -387,7 +391,7 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
   esac
   printf '%s\n' "${col} ${icon} ${summary:0:$((tw-3))}${C_RESET}"
   for line in "${details[@]}"; do                       # detail lines: dimmed, indented, capped
-    [ "$shown" -ge "$max" ] && break
+    [ "$max" -gt 0 ] && [ "$shown" -ge "$max" ] && break
     if [ -n "$line" ]; then
       printf '%s\n' "${C_DIM}   ${line:0:$((tw-3))}${C_RESET}"
     else
@@ -395,7 +399,8 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
     fi              # a provider that draws a small table needs to group its rows
     shown=$((shown + 1))
   done
-  [ "${#details[@]}" -gt "$max" ] && printf '%s\n' "${C_DIM}   +$(( ${#details[@]} - max )) more${C_RESET}"
+  [ "$max" -gt 0 ] && [ "${#details[@]}" -gt "$max" ] && \
+    printf '%s\n' "${C_DIM}   +$(( ${#details[@]} - max )) more${C_RESET}"
   return 0
 }
 
