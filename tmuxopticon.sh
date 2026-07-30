@@ -284,9 +284,56 @@ current_session() { # the session owning this sidebar pane
 #   line3  summary        the headline shown next to the icon
 #   line4+ detail lines   shown dimmed + indented (optional)
 
+# --- render-loop caches -------------------------------------------------------
+#
+# The registry walk and the pull.conf lookup are pure config reads whose answers
+# change about once a month, but `render` used to redo both on EVERY frame, in
+# every sidebar, forever. That was the single largest cost in the loop:
+# `provider_rows` runs `manifest_field` per key per provider, and each of those
+# is a `grep | sed` pipeline — with four providers it alone accounted for most
+# of the ~180 processes a frame was spawning. Multiply by one loop per session
+# and a 1-second interval and the sidebar was the busiest thing on the machine.
+#
+# So both are cached for CACHE_TTL seconds. The cost of staleness is that adding
+# a provider or flipping a flag in pull.conf takes up to that long to show up —
+# which is the right trade for something you do by hand, rarely. Live *tmux
+# options* are deliberately NOT cached: those are the knobs you actually turn
+# mid-session, and they stay instant.
+CACHE_TTL=15
+PROVIDER_ROWS_DATA=''      # cached `provider_rows` output
+PULL_CONF_DATA=''          # cached pull.conf, normalised to \nKEY=VALUE\n
+PULL_CONF_LOADED=0
+CACHE_AT=-999
+
+load_pull_conf() { # slurp + normalise pull.conf — pure bash, zero forks
+  PULL_CONF_DATA=$'\n'
+  PULL_CONF_LOADED=1
+  [ -r "$PULL_CONF" ] || return 0
+  local line k v
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue;; *=*) ;; *) continue;; esac
+    k="${line%%=*}"; v="${line#*=}"
+    k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"   # trim
+    v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+    PULL_CONF_DATA="${PULL_CONF_DATA}${k}=${v}"$'\n'
+  done < "$PULL_CONF"
+}
+
+refresh_caches() { # called once per frame; actually reloads only every CACHE_TTL
+  # $SECONDS is a bash builtin — using `date` here would reintroduce a fork per
+  # frame to decide whether to avoid forks.
+  [ $(( SECONDS - CACHE_AT )) -lt "$CACHE_TTL" ] && [ -n "$PROVIDER_ROWS_DATA" ] && return 0
+  PROVIDER_ROWS_DATA="$(provider_rows)"
+  load_pull_conf
+  CACHE_AT=$SECONDS
+}
+
 pull_enabled() { # pull_enabled <KEY> — true if pull.conf sets KEY to true/1/yes
-  [ -r "$PULL_CONF" ] || return 1
-  grep -qE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*(true|1|yes)[[:space:]]*$" "$PULL_CONF"
+  [ "$PULL_CONF_LOADED" = 1 ] || load_pull_conf
+  case "$PULL_CONF_DATA" in
+    *$'\n'"$1=true"$'\n'*|*$'\n'"$1=1"$'\n'*|*$'\n'"$1=yes"$'\n'*) return 0;;
+  esac
+  return 1
 }
 
 provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> the box lines (divider+title+body)
@@ -377,7 +424,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
       [ -n "$pf_id" ] && [ -n "$pf_flag" ] || continue
       pull_enabled "$pf_flag" || continue
       while IFS= read -r bl; do boxlines+=("$bl"); bh=$((bh + 1)); done < <(provider_box "$pf_title" "$PLUGIN_TMP/$pf_id.cache" "$tw" "$pf_max")
-    done < <(provider_rows)
+    done <<< "$PROVIDER_ROWS_DATA"
   else
     # Collector OFF (the default): nothing is being pulled, so any cached boxes
     # would only show stale data. Draw one quiet notice instead — re-enable with
@@ -485,6 +532,7 @@ render() {
   local interval rc napper
   while :; do
     interval="$(opt @tmuxopticon-interval 2)"        # read live so changes apply at once
+    refresh_caches                                   # config reads, throttled to CACHE_TTL
     # Each frame runs in a subshell so a hard shell error (bad substitution,
     # set -u on an unbound var, a syntax-level surprise in odd input) kills
     # only that frame, not this loop — a crash used to close the sidebar pane
