@@ -48,7 +48,7 @@ check first: `cpu 80% · mem 37% · 59°C`.
 | --- | --- | --- |
 | `cpu 80%` | `/proc/stat` delta | Percent of all cores busy over a 1-second sample. Excludes I/O wait — this is real work, not waiting on disk. |
 | `load 9.2/8` | `/proc/loadavg` | 1-minute load average over core count. Above 1:1 means more runnable work than cores. Unlike `cpu%` it counts tasks blocked on disk too. |
-| `1966f/s` | `/proc/stat` `processes` delta | **Forks per second** — how many new processes are being spawned. Only shown above 100/s. Tens per second is normal; hundreds or thousands is a runaway poll loop, and it is the usual explanation for a box pegged in *system* time while no single process looks busy. |
+| `1966f/s` | `/proc/stat` `processes` delta | **Task spawns per second.** The kernel's fork counter increments on every `clone()`, so this counts new *threads* as well as new processes. Only shown above 100/s. Tens per second is normal; hundreds or thousands is a runaway poll loop, and it is the usual explanation for a box pegged in *system* time while no single process looks busy — those tasks are far too short-lived for any sampler to attribute. |
 | `mem 11/30G` | `/proc/meminfo` | Used / total RAM, where "used" is `MemTotal - MemAvailable` (so cache that can be reclaimed doesn't count as used). |
 | `swap 11G` | `/proc/meminfo` | Swap in use. Only shown above 256 MiB. Swap being *used* is fine; swap growing while memory pressure rises is not. |
 | `gpu 17%` | vendor-specific | GPU busy. NVIDIA via `nvidia-smi`, AMD via `gpu_busy_percent`, Intel Arc / `xe` via the inverse of idle residency. Absent on hardware with no unprivileged counter. |

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# pre-commit — stop private things reaching a PUBLIC repo.
+#
+# tmuxopticon is shareable, but the providers it hosts are exactly the kind of
+# code that grows personal: a channel ID, a colleague's Slack handle, an
+# internal hostname, a rule like "alarm when my boss messages me". Those belong
+# in a private provider (see README.md "Keeping private logic out of this
+# repo"), not here — and the point of this hook is that you don't have to
+# *remember* that at the moment you're mid-thought.
+#
+# It scans the STAGED CONTENT of every added/modified file against two lists:
+#
+#   1. Structural patterns — credentials and workspace object IDs that are
+#      never correct in this repo, no matter whose they are. Hardcoded below.
+#   2. Your own words — names, employers, internal domains, handles. These are
+#      themselves private, so they live OUTSIDE this repo, in the first of:
+#         $TMUXOPTICON_PRIVATE_WORDS
+#         ~/.config/tmuxopticon/private-words
+#         ~/.config/tmuxopticon/providers.d/private-words
+#      One extended-regex per line, '#' comments and blank lines ignored,
+#      matched case-insensitively. No file = structural checks only.
+#
+# Install:  hooks/install.sh        (sets core.hooksPath, covers future hooks)
+# Bypass:   git commit --no-verify  (deliberate, and it will be in your reflog)
+#
+# bash 3.2 compatible, like the rest of the repo.
+
+set -u
+LC_ALL=C; export LC_ALL
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxopticon"
+
+# Credentials and workspace identifiers. Kept deliberately narrow — a hook that
+# cries wolf gets bypassed reflexively, which is worse than no hook. Two of these
+# are tuned against real false positives found on the day they were written:
+#
+#   - The Slack ID pattern requires a digit inside the token. Without it,
+#     `\b[UCTGWD][A-Z0-9]{9,}\b` matches ordinary all-caps English and the
+#     LICENSE fails its own hook on "WARRANTIES" and "CONNECTION".
+#   - The Slack token pattern requires the leading numeric segment a real token
+#     has, so the documented `xoxp-your-token-here` placeholder stays legal.
+STRUCTURAL='
+xox[abposr]-[0-9]{8,}=Slack token
+gh[pousr]_[A-Za-z0-9]{20,}=GitHub token
+AKIA[0-9A-Z]{16}=AWS access key id
+u[0-9]{6,}-[a-f0-9]{24,}=Uptime Robot API key
+-----BEGIN [A-Z ]*PRIVATE KEY-----=private key
+\b[UCTGWD][A-Z0-9]{3,}[0-9][A-Z0-9]{3,}\b=Slack workspace/channel/user ID
+\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b=email address
+'
+
+WORDS_FILE=''
+for cand in "${TMUXOPTICON_PRIVATE_WORDS:-}" \
+            "$CONFIG_DIR/private-words" \
+            "$CONFIG_DIR/providers.d/private-words"; do
+  [ -n "$cand" ] && [ -r "$cand" ] && { WORDS_FILE="$cand"; break; }
+done
+
+hits=0
+
+report() { # report <file> <line-no> <what> <line-text>
+  [ "$hits" -eq 0 ] && {
+    printf '\n\033[1;97;41m ✖ pre-commit: private content staged for a PUBLIC repo \033[0m\n\n'
+  }
+  hits=$(( hits + 1 ))
+  printf '  \033[1m%s:%s\033[0m — %s\n' "$1" "$2" "$3"
+  printf '    %s\n' "$(printf '%s' "$4" | cut -c1-100)"
+}
+
+# Whole staged files, not just added lines: a leak that slipped in three commits
+# ago is still a leak, and this is the last gate before it becomes public.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in *.png|*.jpg|*.gif|*.pdf|*.ico) continue;; esac
+  content="$(git show ":$f" 2>/dev/null)" || continue
+
+  # 1. structural
+  while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    pat="${rule%%=*}"; label="${rule#*=}"
+    while IFS= read -r m; do
+      [ -n "$m" ] && report "$f" "${m%%:*}" "$label" "${m#*:}"
+    done <<EOF
+$(printf '%s' "$content" | grep -nE "$pat" 2>/dev/null)
+EOF
+  done <<EOF
+$(printf '%s' "$STRUCTURAL" | grep -v '^[[:space:]]*$')
+EOF
+
+  # 2. your own denylist
+  [ -n "$WORDS_FILE" ] || continue
+  while IFS= read -r w; do
+    case "$w" in ''|'#'*) continue;; esac
+    while IFS= read -r m; do
+      [ -n "$m" ] && report "$f" "${m%%:*}" "private word: $w" "${m#*:}"
+    done <<EOF
+$(printf '%s' "$content" | grep -niE "$w" 2>/dev/null)
+EOF
+  done < "$WORDS_FILE"
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACM)
+EOF
+
+if [ "$hits" -gt 0 ]; then
+  cat <<'TXT'
+
+  This repo is public. If any of the above is real:
+
+    • Move the logic to a PRIVATE provider — a directory under
+      ~/.config/tmuxopticon/providers.d/ (which can itself be a symlink into a
+      private repo). The registry discovers it exactly like a bundled one, and
+      it never sees this repo. See README.md → "Keeping private logic out of
+      this repo".
+    • Or keep the code here and move only the *values* into config —
+      ~/.config/tmuxopticon/pull.conf or a provider's own env file. That is how
+      the bundled Slack provider handles channel IDs.
+
+  If it is a false positive, add nothing here — this file is public too.
+  Bypass once with:  git commit --no-verify
+
+TXT
+  exit 1
+fi
+
+exit 0

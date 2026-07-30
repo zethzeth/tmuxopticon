@@ -105,10 +105,12 @@ collect_linux_pre() { # first half of every delta-based reading
   pre_idle=$(( s_idle + s_iow ))
   pre_iow=$s_iow
 
-  # Total forks since boot. Its delta is the *process churn* rate, and it is the
-  # one number that explains a box which is pegged in system time while no single
-  # process looks busy: thousands of short-lived processes, each too brief to be
-  # caught by any two-sample PID diff (including the one below).
+  # The kernel's fork counter since boot. NB it counts every clone(), so threads
+  # land in here alongside processes — call it "task spawns", not "processes".
+  # Its delta is the churn rate, and it is the one number that explains a box
+  # pegged in system time while no single process looks busy: thousands of
+  # short-lived tasks, each far too brief to be caught by any two-sample PID
+  # diff (including the one below).
   pre_forks="$(awk '/^processes /{ print $2; exit }' /proc/stat)"
 
   # Intel (xe) exposes GPU *idle* residency in ms; busy% is what it didn't idle.

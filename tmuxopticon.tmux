@@ -22,7 +22,7 @@ tmux set -gq @tmuxopticon-width    '34'
 tmux set -gq @tmuxopticon-interval '1'
 # Friendly aliases for ugly hostnames in SSH-pane paths, ';'-separated from=to
 # pairs (off by default — this is where personal hostnames live, NOT in the
-# engine):  set -g @tmuxopticon-host-aliases 'ip-10-13-99-46=zeod;10.0.0.5=db'
+# engine):  set -g @tmuxopticon-host-aliases 'ip-10-13-99-46=api1;10.0.0.5=db'
 #
 # The bottom status boxes are fed by providers/collect.sh (a cron job) and chosen
 # in ~/.config/tmuxopticon/pull.conf — no tmux options needed to enable them.

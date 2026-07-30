@@ -92,6 +92,20 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   `providers/`; each *provider* is a subdirectory with a `provider.conf`. Only
   subdirs with a manifest are discovered, so the collector scripts aren't mistaken
   for providers.
+- `hooks/` — `pre-commit` + `install.sh`. **This repo is public and providers are
+  where personal detail creeps in**, so the hook scans staged content for
+  credentials, Slack workspace IDs, email addresses, and any regex on a denylist
+  read from *outside* the repo (`$TMUXOPTICON_PRIVATE_WORDS`,
+  `~/.config/tmuxopticon/private-words`, or
+  `~/.config/tmuxopticon/providers.d/private-words`). `install.sh` sets
+  `core.hooksPath` (git never clones hooks). Two structural patterns are tuned
+  against real false positives and must stay that way: the Slack-ID regex
+  requires an embedded digit (without it, plain all-caps English matches and
+  `LICENSE` fails its own hook on "WARRANTIES"), and the token regex requires a
+  numeric segment so the documented `xoxp-your-token-here` placeholder stays
+  legal. Policy, not just mechanism: private *values* belong in config files
+  (as the Slack provider does with channel IDs), private *behaviour* belongs in
+  a `providers.d/` provider that can symlink into a private repo.
 - `examples/` — `pull.conf.example` (the committed template for the user's
   `pull.conf`) and `provider-template/` (a copy-paste manifest + skeleton
   `pull.sh` for a new provider).
@@ -278,8 +292,10 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
     (1s) between them. The per-process figure is a `/proc/<pid>/stat` utime+stime
     delta, deliberately *not* `ps`'s `%cpu`, which is a lifetime average and on a
     long-uptime box blames whatever was busy last week. Processes born *and*
-    killed inside the window escape any PID diff — that's what the `f/s` fork
-    rate (delta of `processes` in `/proc/stat`) is there to catch.
+    killed inside the window escape any PID diff — that's what the `f/s` spawn
+    rate (delta of `processes` in `/proc/stat`) is there to catch. That counter
+    increments on every `clone()`, so it counts threads too; the docs say "task
+    spawns", not "processes", on purpose.
   (`provider.conf`: id `machine`, order 15, timeout 20.) Legend + thresholds live
   in `providers/machine/README.md`.
 - **Open PRs** — has **no puller in this repo on purpose**: the `prs` command is

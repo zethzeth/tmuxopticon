@@ -86,7 +86,7 @@ opt() { # opt <@option> <default>
 
 apply_host_aliases() { # rewrite ugly hostnames in a path via @tmuxopticon-host-aliases
   # The option is a ';'-separated list of from=to pairs, e.g.
-  #   set -g @tmuxopticon-host-aliases 'ip-10-13-99-46=zeod;10.0.0.5=db'
+  #   set -g @tmuxopticon-host-aliases 'ip-10-13-99-46=api1;10.0.0.5=db'
   # Each `from` is substring-replaced with `to` (so an SSH path's "host:" prefix
   # gets a friendly alias). Empty option -> the path is returned untouched. This
   # keeps personal hostnames out of the shared engine — set them in your own conf.

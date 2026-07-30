@@ -21,7 +21,7 @@ you can glance left and jump straight to whichever session needs you.
  ✎ BLOCKED: needs local setup   BLOCK… notes go bold red
 ○ done ~/code/dotfiles
 N nvim    ~/code/conf    plain panes get an icon too:
-⇄ remote  zeod:~/api     nvim / SSH / local shell
+⇄ remote  api1:~/api    nvim / SSH / local shell
 $ shell   ~/scratch
 ──────────────────────
 
@@ -140,7 +140,7 @@ set -g @tmuxopticon-interval        1     # redraw interval in seconds
 set -g @tmuxopticon-provider-stale  180   # secs before a status cache reads "stale"
 
 # friendly aliases for ugly hostnames in SSH-pane paths (';'-separated from=to)
-set -g @tmuxopticon-host-aliases    'ip-10-13-99-46=zeod;10.0.0.5=db'
+set -g @tmuxopticon-host-aliases    'ip-10-13-99-46=api1;10.0.0.5=db'
 # set this BEFORE the run-shell line to bind the keys yourself instead of the defaults
 set -g @tmuxopticon-default-keys    'off'
 ```
@@ -360,7 +360,7 @@ The puller writes the shared cache format (`epoch` / `ok|info|warn|err` /
 summary / detail lines) to the path it's handed — exactly like the bundled ones.
 Discovery scans **two roots**:
 
-- `providers/*/` — **bundled** with the repo (the three above).
+- `providers/*/` — **bundled** with the repo (the four above).
 - `~/.config/tmuxopticon/providers.d/*/` — **your own**, out of the repo, so a
   `git pull` on the plugin never clobbers them.
 
@@ -370,6 +370,49 @@ set its `flag` to `true` in `~/.config/tmuxopticon/pull.conf`. The collector run
 it into `tmp/<id>.cache` and the sidebar draws a box for it, in the manifest's
 `order`. The render loop stays network-free. See `lib/providers.sh` for the full
 manifest reference.
+
+### Keeping private logic out of this repo
+
+Providers are the part of this codebase that gets personal fastest. A watch rule
+grows a colleague's name; a health check grows an internal hostname. This repo is
+public, so it draws a line: **the bundled providers hold generic engines and
+worked examples, and anything that identifies a person, an employer or a
+workspace lives outside them.**
+
+Two places to put the private part, in order of preference:
+
+1. **Move the values into config, keep the code here.** The bundled Slack
+   provider is the model — the poller is generic, and every channel ID, label
+   and false-alarm filter lives in `~/.config/tmuxopticon/slack.env`. Nothing
+   identifying ever enters the tree. Prefer this whenever only the *data* is
+   private.
+2. **Write a private provider.** When the *behaviour* itself is personal —
+   "alarm me when a specific person messages" — the whole provider belongs in
+   `~/.config/tmuxopticon/providers.d/<name>/`. The registry treats it exactly
+   like a bundled one. Because that path is outside the repo, it can be a
+   symlink into a private repo of your own, which gets it version-controlled and
+   synced across machines without ever being pushable here:
+
+   ```sh
+   ln -s ~/code/my-private-dotfiles/tmuxopticon-providers/boss \
+         ~/.config/tmuxopticon/providers.d/boss
+   ```
+
+And a backstop for the evening you edit a bundled provider without thinking
+about it — a pre-commit hook that refuses to commit staged credentials, Slack
+workspace IDs, email addresses, or any word on a denylist you keep *outside*
+this repo:
+
+```sh
+hooks/install.sh        # sets core.hooksPath; needed once per clone
+```
+
+The denylist is read from the first of `$TMUXOPTICON_PRIVATE_WORDS`,
+`~/.config/tmuxopticon/private-words`, or
+`~/.config/tmuxopticon/providers.d/private-words` — one extended regex per line,
+case-insensitive. With no such file the structural credential checks still run.
+Blocked commits name the file and line; `git commit --no-verify` overrides
+deliberately.
 
 ## Requirements
 
