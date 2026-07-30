@@ -823,7 +823,7 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
 
   ${C_BOLD}Config${C_RESET}  (set -g in your .tmux.conf)
     @tmuxopticon-width           sidebar width in columns       (default 34)
-    @tmuxopticon-interval        redraw interval in seconds      (default 1)
+    @tmuxopticon-interval        redraw interval in seconds      (default 2)
     @tmuxopticon-provider-stale  secs before a cache is "stale"  (default 180)
     @tmuxopticon-host-aliases    from=to;… aliases for SSH-path hostnames
     @tmuxopticon-default-keys    set 'off' to bind the keys yourself

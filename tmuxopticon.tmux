@@ -19,7 +19,13 @@ SCRIPT="$CURRENT_DIR/tmuxopticon.sh"
 
 # --- defaults (override these in your own .tmux.conf if you like) -----
 tmux set -gq @tmuxopticon-width    '34'
-tmux set -gq @tmuxopticon-interval '1'
+# 2s, not 1s. The redraw loop runs once per tmux SESSION, and a frame costs
+# real work (a capture-pane and a status scrape per pane), so the cost of this
+# number is multiplied by however many sessions are open. At 1s on a busy box
+# the sidebar was measurably the heaviest thing running. 2s halves that and is
+# indistinguishable in use — status changes still land well inside the time it
+# takes to look over at the panel.
+tmux set -gq @tmuxopticon-interval '2'
 # Friendly aliases for ugly hostnames in SSH-pane paths, ';'-separated from=to
 # pairs (off by default — this is where personal hostnames live, NOT in the
 # engine):  set -g @tmuxopticon-host-aliases 'ip-10-13-99-46=api1;10.0.0.5=db'
