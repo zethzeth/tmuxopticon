@@ -244,7 +244,12 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   `order`. `bh` counts the total box rows across all enabled providers; if any box
   draws, the session list is capped to `avail = h - bh`.
 - **A box's detail-line cap is per provider** (`max_lines` in the manifest,
-  default 6), passed to `provider_box` as its 4th argument. It sits early in the
+  default 6, **`0` = no cap at all**), passed to `provider_box` as its 4th
+  argument. Use 0 for a provider whose output is a bounded *table* — truncating
+  one hides its bottom rows, which is where the Machine box keeps the
+  per-application diagnosis, and a "+N more" you cannot expand is worse than
+  the data. Picking a number big enough for today's worst case (this started at
+  14) just makes every future row a truncation bug waiting to happen. It sits early in the
   `provider_rows` row (right after `flag`) because the render loop reads only the
   first few columns and lets `pf_rest` swallow the tail — anything the *renderer*
   needs must come before the collector-only fields. `collect.sh` reads the same
@@ -331,9 +336,9 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
     box all three rows came back `mem` and the thing burning the CPU never
     appeared. Rows aggregate by **program name**, not PID, so a browser's fifty
     processes are one row.
-  (`provider.conf`: id `machine`, order 15, timeout 20, **`max_lines=14`** — the
-  default cap of 6 is built for a headline-plus-notes provider and this one is a
-  table.) Legend + thresholds live in `providers/machine/README.md`.
+  (`provider.conf`: id `machine`, order 15, timeout 20, **`max_lines=0`** — uncapped;
+  the default of 6 is built for a headline-plus-notes provider and this one is a
+  table whose last rows carry half the meaning.) Legend + thresholds live in `providers/machine/README.md`.
 - **Open PRs** — has **no puller in this repo on purpose**: the `prs` command is
   work-specific, so the puller lives in the work-tooling repo and `pull.conf`
   points `PRS_PULL_CMD` at it. The puller takes a cache path as `$1` and writes
