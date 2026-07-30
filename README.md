@@ -276,36 +276,50 @@ The one provider that watches the box you're *typing on* rather than something
 out on the network: **why does this machine feel slow right now?**
 
 ```
-──────────────────────────────
+─────────────────────────────────
  Machine
- • cpu 80% · mem 37% · 59°C
-   cpu 80%  load 9.2/8 · 1966f/s
-   mem 11/30G · swap 11G
-   gpu 17% · 800MHz
-   tmp cpu 59° · ssd 49°
-   psi c18 i5 m0 · dsk 16%
-   top s1-agent 36% · ghostty 20%
+ • cpu 68% · mem 35% · 58°C
+   cpu     █████░░░  68%
+   mem     ███░░░░░  35%  11/30G
+   gpu     █░░░░░░░  13%
+   temp    ███░░░░░  58°C
+   net     ↓ 660B/s ↑   1K/s
+   stall   cpu 8   io 11  mem 0
+   spawn   1890/s
+
+   cpu     s1-agent         23%
+   mem     chrome          4.3G
+   mem     code            1.2G
 ```
+
+Two columns — a 7-character *what*, then the *level*. Anything with a real
+ceiling gets a bar, so cpu, memory, GPU and temperature are comparable at a
+glance without reading a digit; rates (`net`, `spawn`) show raw values because
+there is no honest 100% to bar them against. Below the spacer, the same two
+columns describe **applications**: the biggest CPU consumer, the biggest memory
+consumer, and whichever is next — each tagged with the resource it's greedy on,
+and aggregated by program, so a browser's fifty processes add up to one row.
 
 Green `○` is comfortable, neutral `•` is working hard but not stalling (a normal
 state mid-build), and red `●` means degraded — with the headline **naming the
 culprit**: `slow: io stall 22%`, `slow: memory 94%`, `slow: cpu 93°C`.
 
 Set `MACHINE_PULL_ENABLED=true` and that's it — no key, no network, no root.
-Every line is skipped when its numbers aren't available, so hardware without a
+Every row is skipped when its numbers aren't available, so hardware without a
 GPU counter or a temperature sensor just gets a shorter box.
 
-The line worth knowing about is `psi` — the kernel's **Pressure Stall
-Information**, the share of the last minute actually *lost* waiting on `c`pu,
-disk `i`/o, or `m`emory. `cpu 100%` with `psi c0` is a machine doing its job;
-`psi i40` is a machine you are waiting on. Its companion is `f/s`, the fork
-rate, which appears above 100/s and is the usual explanation for a box pegged in
-system time while no single process looks busy.
+The row worth knowing about is `stall` — the kernel's **Pressure Stall
+Information**, the share of the last minute actually *lost* waiting on cpu, disk
+io, or memory. `cpu 100%` with `stall cpu 0` is a machine doing its job;
+`stall io 40` is a machine you are waiting on. Its companion is `spawn`, the
+task-creation rate, which appears above 500/s and is the usual explanation for a
+box pegged in system time while no single process looks busy.
 
-**`providers/machine/README.md` is the full legend** — every abbreviation, where
-it's read from, and the exact thresholds. Linux gets everything; macOS gets cpu,
-load, memory, disk and top processes (no PSI, no fork rate, no GPU, and
-temperature only with `osx-cpu-temp` installed).
+**`providers/machine/README.md` is the full legend** — every row, where it's
+read from, how to read `11/30G`, the exact thresholds, and what is deliberately
+left out (load average, drive temperature, GPU clock). Linux gets everything;
+macOS gets cpu, memory, disk and the application rows (no stall, no spawn, no
+net, no GPU, and temperature only with `osx-cpu-temp` installed).
 
 ### Open PRs
 

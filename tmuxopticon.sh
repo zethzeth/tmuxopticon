@@ -289,10 +289,11 @@ pull_enabled() { # pull_enabled <KEY> — true if pull.conf sets KEY to true/1/y
   grep -qE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*(true|1|yes)[[:space:]]*$" "$PULL_CONF"
 }
 
-provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divider+title+body)
-  local title="$1" cache="$2" tw="$3"
+provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> the box lines (divider+title+body)
+  local title="$1" cache="$2" tw="$3" max="${4:-6}"
   [ -r "$cache" ] || return 0          # enabled but nothing pulled yet -> stay quiet
-  local stale now epoch state summary line details=() idx=0 shown=0 max=6 div age icon col bar pad staleline synctime
+  case "$max" in ''|*[!0-9]*) max=6;; esac   # manifest `max_lines`, sanitised
+  local stale now epoch state summary line details=() idx=0 shown=0 div age icon col bar pad staleline synctime
   stale="$(opt @tmuxopticon-provider-stale 180)"       # cron refreshes ~every 60s; flag if cold
   printf -v div '%*s' "$tw" ''; div="${div// /─}"
   # Read the whole cache first, so the renderer can pick a layout from the state
@@ -340,7 +341,11 @@ provider_box() { # provider_box <title> <cachefile> <tw> -> the box lines (divid
   printf '%s\n' "${col} ${icon} ${summary:0:$((tw-3))}${C_RESET}"
   for line in "${details[@]}"; do                       # detail lines: dimmed, indented, capped
     [ "$shown" -ge "$max" ] && break
-    [ -n "$line" ] && printf '%s\n' "${C_DIM}   ${line:0:$((tw-3))}${C_RESET}"
+    if [ -n "$line" ]; then
+      printf '%s\n' "${C_DIM}   ${line:0:$((tw-3))}${C_RESET}"
+    else
+      printf '\n'   # an empty detail line is a deliberate spacer row, not a no-op:
+    fi              # a provider that draws a small table needs to group its rows
     shown=$((shown + 1))
   done
   [ "${#details[@]}" -gt "$max" ] && printf '%s\n' "${C_DIM}   +$(( ${#details[@]} - max )) more${C_RESET}"
@@ -367,11 +372,11 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
     # the very bottom, closest to the edge = most visible). provider_box draws
     # nothing for a provider whose cache doesn't exist yet, so enabled-but-unpulled
     # stays silent. The registry walk is filesystem-only — no pull.conf sourcing.
-    local pf_order pf_id pf_title pf_flag pf_rest
-    while IFS=$'\037' read -r pf_order pf_id pf_title pf_flag pf_rest; do
+    local pf_order pf_id pf_title pf_flag pf_max pf_rest
+    while IFS=$'\037' read -r pf_order pf_id pf_title pf_flag pf_max pf_rest; do
       [ -n "$pf_id" ] && [ -n "$pf_flag" ] || continue
       pull_enabled "$pf_flag" || continue
-      while IFS= read -r bl; do boxlines+=("$bl"); bh=$((bh + 1)); done < <(provider_box "$pf_title" "$PLUGIN_TMP/$pf_id.cache" "$tw")
+      while IFS= read -r bl; do boxlines+=("$bl"); bh=$((bh + 1)); done < <(provider_box "$pf_title" "$PLUGIN_TMP/$pf_id.cache" "$tw" "$pf_max")
     done < <(provider_rows)
   else
     # Collector OFF (the default): nothing is being pulled, so any cached boxes

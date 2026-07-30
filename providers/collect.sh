@@ -59,7 +59,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
 # *attempt*, so a rate-limited failure still backs off the full window instead of
 # hammering each minute. `--force` bypasses every throttle.
 force=''; [ "${1:-}" = "--force" ] && force=1
-while IFS=$'\037' read -r order id title flag pull pcv timeout throttle dir; do
+while IFS=$'\037' read -r order id title flag max pull pcv timeout throttle dir; do
   [ -n "$id" ] && [ -n "$flag" ] || continue
   [ "${!flag:-}" = true ] || continue              # gated off in pull.conf -> skip
 

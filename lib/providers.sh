@@ -28,6 +28,11 @@
 #   order         stacking order in the panel, low = top           (default: 50)
 #   timeout       hard per-pull timeout in seconds                 (default: 45)
 #   throttle_min  minutes to wait between pulls, 0 = every run     (default: 0)
+#   max_lines     detail lines the box may draw before "+N more"   (default: 6)
+#                 Raise it for a provider that is a small table rather than a
+#                 headline plus a few notes (see providers/machine). Costs
+#                 sidebar height: render reserves every box row and caps the
+#                 session list to what's left.
 #
 # Every puller obeys one contract: invoked as `<puller> <cachefile>`, it writes
 # the shared cache format (epoch / state / summary / detail lines) to that path.
@@ -49,14 +54,17 @@ manifest_field() { # manifest_field <file> <key> [default] -> the value, trimmed
 # tab is IFS-whitespace, so `read` would coalesce the two delimiters around an
 # empty middle field (e.g. a BYO provider's blank `pull`) and shift every column
 # left. 0x1F is non-whitespace, so empty fields survive. Readers must split on it:
-#   while IFS=$'\037' read -r order id title flag pull pcv timeout throttle dir
+#   while IFS=$'\037' read -r order id title flag max pull pcv timeout throttle dir
+# `max_lines` sits early on purpose: the render loop reads only the first few
+# columns and lets a trailing catch-all swallow the rest, so any field the
+# *renderer* needs must come before the ones only the collector cares about.
 TMUXOPTICON_FS=$'\037'
 
 provider_rows() { # one $TMUXOPTICON_FS-separated row per provider, sorted by order then id:
-  #   order · id · title · flag · pull · pull_cmd_var · timeout · throttle_min · dir
+  #   order · id · title · flag · max_lines · pull · pull_cmd_var · timeout · throttle_min · dir
   # `pull` is absolutized against the provider dir when it's a relative path.
   # Globs that match nothing expand to the literal pattern; the -r guard drops it.
-  local mf dir id title flag pull pcv timeout throttle order fs="$TMUXOPTICON_FS"
+  local mf dir id title flag pull pcv timeout throttle order max fs="$TMUXOPTICON_FS"
   {
     for mf in "$TMUXOPTICON_PLUGIN"/providers/*/provider.conf \
               "$TMUXOPTICON_CONFIG_DIR"/providers.d/*/provider.conf; do
@@ -70,9 +78,10 @@ provider_rows() { # one $TMUXOPTICON_FS-separated row per provider, sorted by or
       timeout="$(manifest_field "$mf" timeout 45)"
       throttle="$(manifest_field "$mf" throttle_min 0)"
       order="$(manifest_field "$mf" order 50)"
+      max="$(manifest_field "$mf" max_lines 6)"
       case "$pull" in ''|/*) ;; *) pull="$dir/$pull";; esac   # relative -> provider dir
-      printf "%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s\n" \
-        "$order" "$id" "$title" "$flag" "$pull" "$pcv" "$timeout" "$throttle" "$dir"
+      printf "%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s${fs}%s\n" \
+        "$order" "$id" "$title" "$flag" "$max" "$pull" "$pcv" "$timeout" "$throttle" "$dir"
     done
   } | sort -t"$fs" -k1,1n -k2,2
 }

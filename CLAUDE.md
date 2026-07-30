@@ -243,6 +243,17 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   most visible) — data-driven, and a user provider can slot anywhere by its
   `order`. `bh` counts the total box rows across all enabled providers; if any box
   draws, the session list is capped to `avail = h - bh`.
+- **A box's detail-line cap is per provider** (`max_lines` in the manifest,
+  default 6), passed to `provider_box` as its 4th argument. It sits early in the
+  `provider_rows` row (right after `flag`) because the render loop reads only the
+  first few columns and lets `pf_rest` swallow the tail — anything the *renderer*
+  needs must come before the collector-only fields. `collect.sh` reads the same
+  row and must stay in step with the column order.
+- **An empty detail line is a deliberate spacer row**, printed as a blank line
+  rather than skipped. A provider drawing a small table needs to group its rows
+  (the Machine box separates machine-wide readings from per-application ones this
+  way). It still counts toward `max_lines` and `bh`, so the bottom-anchor math
+  stays correct.
 - **Bottom anchoring is real cursor math**, not just "print last". render measures
   `pane_height`, reserves `bh` rows for the boxes, **caps the session list to
   `avail = h - bh`** (the `prow` counter — this also stops a long list from
@@ -272,13 +283,23 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   renders through `provider_box` like everything else, and the script stays
   Slack-agnostic about *rendering*. (`provider.conf`: id `slack`, order 30.)
 - **`machine/pull.sh <cache>`** — local box health, the only provider that never
-  leaves the machine. Six ~30-column lines: cpu/load/fork-rate, memory/swap,
-  GPU, temperatures, PSI/disk, top processes. Three states map onto the existing
-  vocabulary: `ok` comfortable, `info` busy-but-not-stalling (a dev box mid-build
-  lives here), `warn` degraded — and a `warn` summary **names the culprit**
-  (`slow: io stall 22%`) because "slow" alone is not a diagnosis. Every line is
-  omitted when its numbers are unavailable, so a box with no GPU counter just
-  draws shorter. Three traps are baked in, do not "simplify" them away:
+  leaves the machine. It's a **two-column table**, not prose: a 7-char label then
+  the level (`row()` owns that contract in one place). Anything with a real
+  ceiling gets an 8-wide bar so cpu/mem/gpu/temp are comparable without reading a
+  digit; rates (`net`, `spawn`) print raw values because there's no honest 100%
+  to bar against. `temp` is scaled 30→100°C — a 0-based bar never leaves its
+  first third and stops being a gauge. Then a **spacer row** and three
+  application rows. Three states map onto the existing vocabulary: `ok`
+  comfortable, `info` busy-but-not-stalling (a dev box mid-build lives here),
+  `warn` degraded — and a `warn` summary **names the culprit** (`slow: io stall
+  22%`) because "slow" alone is not a diagnosis. Every row is omitted when its
+  numbers are unavailable, so a box with no GPU counter just draws shorter.
+  Design decisions that look like omissions but aren't: load average, drive
+  temperature and GPU clock are **deliberately not shown** (`stall cpu` says what
+  load says without a division; the other two are never the answer), and swap and
+  disk stay hidden until they cross a threshold. Every row costs sidebar height
+  the session list would otherwise get — that's the budget being spent.
+  Five traps are baked in, do not "simplify" them away:
   - **`LC_ALL=C` at the top.** `printf`/`awk` parse floats through `strtod`,
     which reads a decimal *comma* under a Danish/German locale — without this
     every float silently truncates to its integer part.
@@ -292,12 +313,27 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
     (1s) between them. The per-process figure is a `/proc/<pid>/stat` utime+stime
     delta, deliberately *not* `ps`'s `%cpu`, which is a lifetime average and on a
     long-uptime box blames whatever was busy last week. Processes born *and*
-    killed inside the window escape any PID diff — that's what the `f/s` spawn
+    killed inside the window escape any PID diff — that's what the `spawn`
     rate (delta of `processes` in `/proc/stat`) is there to catch. That counter
     increments on every `clone()`, so it counts threads too; the docs say "task
     spawns", not "processes", on purpose.
-  (`provider.conf`: id `machine`, order 15, timeout 20.) Legend + thresholds live
-  in `providers/machine/README.md`.
+  - **`/proc/net/dev` must be split on the COLON**, not parsed by whitespace
+    field number. The file right-pads the interface name to 6 chars, so `lo:`
+    gets a space before its first counter and `wlp0s20f3:` does not — field
+    numbering shifts *per interface*, and the offset-based version silently
+    reported packet counts as byte counts. Everything after the colon is the 16
+    counters (#1 rx bytes, #9 tx bytes). Virtual interfaces are excluded because
+    container/bridge traffic also crosses the real NIC and would be counted twice.
+  - **The three application rows are picked for coverage, not ranking**: biggest
+    CPU consumer, biggest memory consumer, then whichever is next. A straight
+    "top 3 by share of the box" was tried and reads badly — RAM is measured
+    against 30 GB while one core is an eighth of the machine, so on a CPU-pegged
+    box all three rows came back `mem` and the thing burning the CPU never
+    appeared. Rows aggregate by **program name**, not PID, so a browser's fifty
+    processes are one row.
+  (`provider.conf`: id `machine`, order 15, timeout 20, **`max_lines=14`** — the
+  default cap of 6 is built for a headline-plus-notes provider and this one is a
+  table.) Legend + thresholds live in `providers/machine/README.md`.
 - **Open PRs** — has **no puller in this repo on purpose**: the `prs` command is
   work-specific, so the puller lives in the work-tooling repo and `pull.conf`
   points `PRS_PULL_CMD` at it. The puller takes a cache path as `$1` and writes
