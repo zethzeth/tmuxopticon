@@ -80,6 +80,10 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
     `tmp/slack.cache`) + a thin `pull.sh` adapter (the registry calls
     `pull.sh <cache>`; the poller takes its cache via `$SLACK_ALARM_CACHE` + a
     `poll` subcommand, so the adapter bridges them) + the `*.example` templates.
+  - `machine/` — `provider.conf` + `pull.sh` + a `README.md` that is the user's
+    **legend** for the box's abbreviations. The only provider with no network and
+    no secret: it reads `/proc`, `/sys` and process tables for local CPU / memory
+    / GPU / thermal health.
   - `prs/` — `provider.conf` + a `README.md`, but **no puller**: the Open PRs
     fetch is work-specific, so the manifest sets `pull_cmd_var=PRS_PULL_CMD` and
     the user points that at their own script. The canonical "bring your own
@@ -167,8 +171,8 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
 ## Status panel (bottom-anchored boxes)
 
 A second region sits at the **bottom** of the sidebar, independent of the session
-list: a stack of boxes for cross-cutting health signals. Three providers ship:
-**Uptime Robot**, **Open PRs**, **Alarms** (Slack).
+list: a stack of boxes for cross-cutting health signals. Four providers ship:
+**Uptime Robot**, **Machine**, **Open PRs**, **Alarms** (Slack).
 
 **The big invariant: render NEVER touches the network.** This was a deliberate
 re-engineering (it also fixed a bug where each long-running `render` process
@@ -220,9 +224,9 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   fall through to the per-provider gating below.
 - **render gates each box on `pull_enabled <FLAG>`** and the cache's existence,
   looping over `provider_rows` in registry **`order`** (low=top). The bundled
-  manifests set Uptime Robot=10, Open PRs=20, Alarms=30, so the default stack is
-  Uptime Robot, Open PRs, Alarms (alarms at the very bottom = most visible) — same
-  as before, but now data-driven, and a user provider can slot anywhere by its
+  manifests set Uptime Robot=10, Machine=15, Open PRs=20, Alarms=30, so the default
+  stack is Uptime Robot, Machine, Open PRs, Alarms (alarms at the very bottom =
+  most visible) — data-driven, and a user provider can slot anywhere by its
   `order`. `bh` counts the total box rows across all enabled providers; if any box
   draws, the session list is capped to `avail = h - bh`.
 - **Bottom anchoring is real cursor math**, not just "print last". render measures
@@ -253,6 +257,31 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   (the poller predates the `pull.sh <cache>` contract). `alarms_box` is gone — it
   renders through `provider_box` like everything else, and the script stays
   Slack-agnostic about *rendering*. (`provider.conf`: id `slack`, order 30.)
+- **`machine/pull.sh <cache>`** — local box health, the only provider that never
+  leaves the machine. Six ~30-column lines: cpu/load/fork-rate, memory/swap,
+  GPU, temperatures, PSI/disk, top processes. Three states map onto the existing
+  vocabulary: `ok` comfortable, `info` busy-but-not-stalling (a dev box mid-build
+  lives here), `warn` degraded — and a `warn` summary **names the culprit**
+  (`slow: io stall 22%`) because "slow" alone is not a diagnosis. Every line is
+  omitted when its numbers are unavailable, so a box with no GPU counter just
+  draws shorter. Three traps are baked in, do not "simplify" them away:
+  - **`LC_ALL=C` at the top.** `printf`/`awk` parse floats through `strtod`,
+    which reads a decimal *comma* under a Danish/German locale — without this
+    every float silently truncates to its integer part.
+  - **`cat /proc/[0-9]*/stat | awk`, never `awk <glob>`.** Processes exit
+    between the glob expanding and the file opening, and **mawk aborts the whole
+    run on the first ENOENT** (gawk merely warns). That truncated the snapshot to
+    low-numbered PIDs, which made every long-running process look brand-new in
+    the second sample and report its lifetime CPU as one second's worth —
+    `gnome-shell 939641%`.
+  - **Rates need two samples**, so the puller sleeps `TMUXOPTICON_MACHINE_SAMPLE`
+    (1s) between them. The per-process figure is a `/proc/<pid>/stat` utime+stime
+    delta, deliberately *not* `ps`'s `%cpu`, which is a lifetime average and on a
+    long-uptime box blames whatever was busy last week. Processes born *and*
+    killed inside the window escape any PID diff — that's what the `f/s` fork
+    rate (delta of `processes` in `/proc/stat`) is there to catch.
+  (`provider.conf`: id `machine`, order 15, timeout 20.) Legend + thresholds live
+  in `providers/machine/README.md`.
 - **Open PRs** — has **no puller in this repo on purpose**: the `prs` command is
   work-specific, so the puller lives in the work-tooling repo and `pull.conf`
   points `PRS_PULL_CMD` at it. The puller takes a cache path as `$1` and writes

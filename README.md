@@ -76,11 +76,12 @@ $ shell   ~/scratch
   bold red. Stored as a per-session tmux option (`@tmuxopticon-note`) — no
   files, survives renames, dies with the session.
 - **A status panel at the bottom.** A bottom-anchored stack of boxes for
-  at-a-glance health signals from elsewhere — **Uptime Robot** monitors, **open
-  PRs** to review, **Slack alarm** channels. These are pulled by a once-a-minute
-  cron job (`providers/collect.sh`) into cache files the sidebar just reads, so
-  the redraw loop never touches the network (see *Status panel* below). Turn
-  each box on in `~/.config/tmuxopticon/pull.conf`.
+  at-a-glance health signals — **Uptime Robot** monitors, **open PRs** to
+  review, **Slack alarm** channels, and **this machine's own** CPU / memory /
+  GPU / temperature. These are pulled by a once-a-minute cron job
+  (`providers/collect.sh`) into cache files the sidebar just reads, so the
+  redraw loop never touches the network (see *Status panel* below). Turn each
+  box on in `~/.config/tmuxopticon/pull.conf`.
 - **No daemon.** A bash script does the work and a `.tmux` file wires up the
   bindings; the redraw loop lives inside the sidebar pane itself. The status
   providers run separately, off a cron clock.
@@ -219,6 +220,7 @@ cache stops refreshing — the tell that cron has stopped.
 ```sh
 SLACK_PULL_ENABLED=true
 UPTIME_ROBOT_PULL_ENABLED=true
+MACHINE_PULL_ENABLED=true
 PRS_PULL_ENABLED=true
 PRS_PULL_CMD=/path/to/your/prs-pull.sh   # see "Open PRs" below
 ```
@@ -267,6 +269,43 @@ With `UPTIME_ROBOT_PULL_ENABLED=true` the collector polls the API each minute
 (`providers/uptimerobot/pull.sh`). With the flag on but no key, the box reads
 `⚠ no API key`; a bad key shows the API's own error text. A read-only key is all
 it needs — it never writes.
+
+### Machine
+
+The one provider that watches the box you're *typing on* rather than something
+out on the network: **why does this machine feel slow right now?**
+
+```
+──────────────────────────────
+ Machine
+ • cpu 80% · mem 37% · 59°C
+   cpu 80%  load 9.2/8 · 1966f/s
+   mem 11/30G · swap 11G
+   gpu 17% · 800MHz
+   tmp cpu 59° · ssd 49°
+   psi c18 i5 m0 · dsk 16%
+   top s1-agent 36% · ghostty 20%
+```
+
+Green `○` is comfortable, neutral `•` is working hard but not stalling (a normal
+state mid-build), and red `●` means degraded — with the headline **naming the
+culprit**: `slow: io stall 22%`, `slow: memory 94%`, `slow: cpu 93°C`.
+
+Set `MACHINE_PULL_ENABLED=true` and that's it — no key, no network, no root.
+Every line is skipped when its numbers aren't available, so hardware without a
+GPU counter or a temperature sensor just gets a shorter box.
+
+The line worth knowing about is `psi` — the kernel's **Pressure Stall
+Information**, the share of the last minute actually *lost* waiting on `c`pu,
+disk `i`/o, or `m`emory. `cpu 100%` with `psi c0` is a machine doing its job;
+`psi i40` is a machine you are waiting on. Its companion is `f/s`, the fork
+rate, which appears above 100/s and is the usual explanation for a box pegged in
+system time while no single process looks busy.
+
+**`providers/machine/README.md` is the full legend** — every abbreviation, where
+it's read from, and the exact thresholds. Linux gets everything; macOS gets cpu,
+load, memory, disk and top processes (no PSI, no fork rate, no GPU, and
+temperature only with `osx-cpu-temp` installed).
 
 ### Open PRs
 
