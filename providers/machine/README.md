@@ -84,7 +84,7 @@ lower than what `free` or a system monitor reports.
 | `gpu` | vendor-specific | GPU busy. NVIDIA via `nvidia-smi`, AMD via `gpu_busy_percent`, Intel Arc / `xe` via the inverse of idle residency. Absent on hardware with no unprivileged counter. |
 | `temp` | `coretemp` / `k10temp` / ACPI | CPU package temperature, barred 30–100°C. Sustained 90°C+ means the machine is slow *because* it is hot. |
 | `net` | `/proc/net/dev` delta | Throughput now, summed over physical interfaces. Loopback, docker, veth, bridges, VPN and tailscale are excluded — a container's traffic also crosses the real NIC, so counting both would double it. |
-| `stall` | `/proc/pressure/*` | **The most honest number in the box.** The percentage of the last 60 seconds that work was *actually lost* waiting for cpu, disk io, or memory. `cpu 100%` with `stall cpu 0` is a machine doing its job; `stall io 40` is a machine you are waiting on. `io` uses the kernel's `full` metric (everything stalled), `cpu` and `mem` use `some` (at least one task stalled). Linux only. |
+| `stall` | `/proc/pressure/*` | **Informational, not a verdict — see the warning below.** The percentage of the last 60 seconds that work was *actually lost* waiting for cpu, disk io, or memory. `cpu 100%` with `stall cpu 0` is a machine doing its job; `stall io 40` is a machine you are waiting on. `io` uses the kernel's `full` metric (everything stalled), `cpu` and `mem` use `some` (at least one task stalled). Linux only. |
 | `spawn` | `/proc/stat` `processes` delta | New tasks per second. The counter increments on every `clone()`, so threads count too. Shown only above 500/s. Tens per second is normal; thousands is a runaway poll loop — and it is the usual explanation for a box pegged in *system* time while no single process looks busy, because those tasks are far too short-lived for any sampler to catch. |
 
 ### The rows that only appear when they matter
@@ -93,6 +93,7 @@ lower than what `free` or a system monitor reports.
 | --- | --- | --- |
 | `swap` | memory is stalling, or RAM ≥ 85% | GB of memory pushed out to disk. Swap merely being *occupied* is normal — the kernel parks idle pages there and never looks back — so it stays hidden until it is plausibly the reason you're waiting. |
 | `disk` | root filesystem ≥ 85% full | Barred like the others. |
+| `dsk` | always, when measurable | How busy the block device actually is (`io_ticks`). This is the row that makes `stall io` interpretable: a high stall next to a near-idle device means nothing is really waiting on storage. |
 
 ### The application rows
 
@@ -122,7 +123,8 @@ for comparing applications, but don't expect the rows to sum to the `mem` row.
 | Condition | Threshold |
 | --- | --- |
 | memory stall | `stall` memory ≥ 5% |
-| io stall | `stall` io ≥ 15% |
+| swap thrash | ≥ 400 pages/s faulted back in from swap |
+| disk saturated | device ≥ 60% busy **and** `stall` io ≥ 40% |
 | cpu stall | `stall` cpu ≥ 25% |
 | memory | ≥ 92% used |
 | cpu temperature | ≥ 90°C |
@@ -130,6 +132,23 @@ for comparing applications, but don't expect the rows to sum to the `mem` row.
 
 `info` (busy, not hurting): load ≥ core count, cpu ≥ 85%, memory ≥ 80%,
 temperature ≥ 80°C, disk ≥ 85%, or spawns ≥ 300/s. Otherwise `ok`.
+
+## Why `stall io` never turns the box red
+
+It used to, and that was wrong. PSI's `full` means *every non-idle task is
+stalled* — so the **fewer** tasks want to run, the easier it is to hit. On an
+interactive desktop that spends most of its time waiting for you, it inflates.
+
+Measured here: after fixing a genuine swap-thrashing problem — swap-out went
+from 4,339 to **0** pages/s and major faults from ~480 to ~84/s, and the machine
+went from sluggish to snappy — `stall io` *rose* from 31% to 48%. It moved the
+wrong way precisely because the machine got quieter. `some` was no better: 56%
+at the same moment.
+
+So the verdict now watches the **mechanism** instead of the symptom: pages
+faulted back in from swap (what you actually wait for) and a genuinely saturated
+device (what a real storage problem looks like). `stall io` stays on screen
+because it is valuable *once you have a suspect* — just read it next to `dsk`.
 
 ## What is deliberately *not* shown
 

@@ -304,7 +304,13 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   load says without a division; the other two are never the answer), and swap and
   disk stay hidden until they cross a threshold. Every row costs sidebar height
   the session list would otherwise get — that's the budget being spent.
-  Five traps are baked in, do not "simplify" them away:
+  **`stall io` is deliberately NOT a warn trigger.** PSI `full` means "every
+  non-idle task is stalled", so it inflates as a machine gets *quieter* — after
+  a real swap-thrashing fix here (swap-out 4339 -> 0 pages/s, major faults 480
+  -> 84/s, machine visibly snappier) it *rose* from 31% to 48%. `some` was 56%
+  at the same moment. The verdict watches the mechanism instead: swap fault-in
+  rate and genuine device saturation. Do not "restore" the io threshold.
+  Six traps are baked in, do not "simplify" them away:
   - **`LC_ALL=C` at the top.** `printf`/`awk` parse floats through `strtod`,
     which reads a decimal *comma* under a Danish/German locale — without this
     every float silently truncates to its integer part.

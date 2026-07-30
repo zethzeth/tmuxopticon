@@ -111,7 +111,7 @@ ncpu=''; load1=''; cpu_busy=''
 mem_used_k=''; mem_total_k=''; mem_pct=''; swap_used_k=''; swap_total_k=''
 gpu_busy=''; cpu_temp=''
 psi_cpu=''; psi_io=''; psi_mem=''
-disk_pct=''; net_rx=''; net_tx=''; forks_s=''
+disk_pct=''; net_rx=''; net_tx=''; forks_s=''; swapin_s=''; dev_busy=''
 top1=''; top2=''; top3=''
 
 # ------------------------------------------------------------------ collectors
@@ -153,6 +153,12 @@ collect_linux_pre() { # first half of every delta-based reading
   # short-lived tasks, far too brief for any two-sample PID diff to catch.
   pre_forks="$(awk '/^processes /{ print $2; exit }' /proc/stat)"
 
+  # Pages faulted back IN from swap, and how busy the block device is. These are
+  # the two readings that actually track *felt* slowness; see the verdict block
+  # for why the io pressure figure alone does not.
+  pre_swpin="$(awk '/^pswpin /{ print $2; exit }' /proc/vmstat)"
+  pre_devticks="$(awk '{ t += $10 } END { print t + 0 }' /sys/block/nvme*/stat /sys/block/sd*/stat 2>/dev/null)"
+
   set -- $(net_bytes); pre_rx="${1:-0}"; pre_tx="${2:-0}"
 
   # Intel (xe) exposes GPU *idle* residency in ms; busy% is what it didn't idle.
@@ -177,6 +183,19 @@ collect_linux_post() { # second half — turn the two samples into rates
   if [ -n "${pre_forks:-}" ] && [ -n "$post_forks" ] && [ "$SAMPLE" -gt 0 ]; then
     forks_s=$(( (post_forks - pre_forks) / SAMPLE ))
     [ "$forks_s" -lt 0 ] && forks_s=''
+  fi
+
+  local post_swpin post_devticks
+  post_swpin="$(awk '/^pswpin /{ print $2; exit }' /proc/vmstat)"
+  if [ -n "${pre_swpin:-}" ] && [ -n "$post_swpin" ] && [ "$SAMPLE" -gt 0 ]; then
+    swapin_s=$(( (post_swpin - pre_swpin) / SAMPLE ))
+    [ "$swapin_s" -lt 0 ] && swapin_s=''
+  fi
+  post_devticks="$(awk '{ t += $10 } END { print t + 0 }' /sys/block/nvme*/stat /sys/block/sd*/stat 2>/dev/null)"
+  if [ -n "${pre_devticks:-}" ] && [ -n "$post_devticks" ] && [ "$SAMPLE" -gt 0 ]; then
+    dev_busy=$(( (post_devticks - pre_devticks) / (10 * SAMPLE) ))   # io_ticks are ms
+    [ "$dev_busy" -lt 0 ] && dev_busy=''
+    [ -n "$dev_busy" ] && [ "$dev_busy" -gt 100 ] && dev_busy=100
   fi
 
   local post_rx post_tx
@@ -462,8 +481,22 @@ gte() { # gte <a> <b> -> echoes 1 when a >= b, else 0 (empty a = 0)
   [ "$1" -ge "$2" ] && printf '1' || printf '0'
 }
 
+# IO pressure is NOT a warn trigger, and this is the correction of a real
+# mistake. `full` means "every non-idle task is stalled" — so the FEWER tasks
+# want to run, the easier it is to hit. On an interactive desktop that is mostly
+# waiting for you, it inflates: measured on this box at 48% while the machine
+# was snappy and every mechanism behind it had just been fixed (swap-out 4339 ->
+# 0 pages/s, major faults 480 -> 84/s). It moved the *wrong way* as the machine
+# got better, because it got quieter. `some` is no better — it was 56% at the
+# same moment. Left in the `stall` row because it is genuinely useful once you
+# have a suspect; taken out of the verdict because on its own it cried wolf.
+#
+# What replaces it is the mechanism, not the symptom: pages being faulted back
+# in from swap is what you actually wait for, and a saturated device is what a
+# real storage problem looks like. Both are things you can act on.
 warn_if "$(gte "$psi_mem" 5)"   "memory stall ${psi_mem}%"
-warn_if "$(gte "$psi_io" 15)"   "io stall ${psi_io}%"
+warn_if "$(gte "$swapin_s" 400)" "swap thrash $(( ${swapin_s:-0} * 4 / 1024 ))M/s"
+[ "$(gte "$dev_busy" 60)" = 1 ] && warn_if "$(gte "$psi_io" 40)" "disk busy ${dev_busy}%"
 warn_if "$(gte "$psi_cpu" 25)"  "cpu stall ${psi_cpu}%"
 warn_if "$(gte "$mem_pct" 92)"  "memory ${mem_pct}%"
 warn_if "$(gte "$cpu_temp" 90)" "cpu ${cpu_temp}°C"
@@ -543,13 +576,21 @@ fi
 # Swap only earns a row once memory is genuinely under pressure. Swap merely
 # being *occupied* is normal — the kernel parks idle pages there and never
 # looks back; it only matters when it's the reason you're waiting.
-if [ -n "${swap_used_k:-}" ] && [ "${swap_used_k:-0}" -gt 262144 ] && \
+if [ "$(gte "$swapin_s" 50)" = 1 ]; then
+  # Actively faulting pages back in — this is the row that means "you are
+  # waiting on swap right now", as opposed to swap merely being occupied.
+  row swap "$(rate $(( swapin_s * 4096 ))) in$([ -n "${swap_used_k:-}" ] && printf '  %sG out' "$(gib "$swap_used_k")")"
+elif [ -n "${swap_used_k:-}" ] && [ "${swap_used_k:-0}" -gt 262144 ] && \
    { [ "$(gte "$psi_mem" 1)" = 1 ] || [ "$(gte "$mem_pct" 85)" = 1 ]; }; then
   row swap "$(gib "$swap_used_k")G paged out"
 fi
 
 if [ -n "$psi_cpu" ] || [ -n "$psi_io" ] || [ -n "$psi_mem" ]; then
+  # io here is FYI, not a verdict — see the warn block. `dsk` is the device's
+  # real utilisation, which is what tells you whether a high io figure means
+  # anything: 48% stall with a 7%-busy disk is an idle machine, not a sick one.
   row stall "$(printf 'cpu %-3s io %-3s mem %s' "${psi_cpu:-0}" "${psi_io:-0}" "${psi_mem:-0}")"
+  [ -n "$dev_busy" ] && row dsk "$(bar "$dev_busy") $(printf '%3s%%' "$dev_busy") busy"
 fi
 
 [ "$(gte "$forks_s" 500)" = 1 ] && row spawn "${forks_s}/s"
