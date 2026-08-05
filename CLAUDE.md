@@ -83,7 +83,11 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   - `machine/` — `provider.conf` + `pull.sh` + a `README.md` that is the user's
     **legend** for the box's abbreviations. The only provider with no network and
     no secret: it reads `/proc`, `/sys` and process tables for local CPU / memory
-    / GPU / thermal health.
+    / GPU / thermal health. Plus `pull-remote.sh <cache> <host>`, which draws the
+    same table for *another* box — it streams `pull.sh` over ssh with `bash -s`
+    and runs it there, so nothing is installed on the remote and there is no
+    second copy to keep in sync. That only works while `pull.sh` stays
+    self-contained (no sourcing, no sibling files, no config) — keep it that way.
   - `prs/` — `provider.conf` + a `README.md`, but **no puller**: the Open PRs
     fetch is work-specific, so the manifest sets `pull_cmd_var=PRS_PULL_CMD` and
     the user points that at their own script. The canonical "bring your own
@@ -345,6 +349,20 @@ provider, keep this shape — a puller invoked by the collector, never a fetch i
   (`provider.conf`: id `machine`, order 15, timeout 20, **`max_lines=0`** — uncapped;
   the default of 6 is built for a headline-plus-notes provider and this one is a
   table whose last rows carry half the meaning.) Legend + thresholds live in `providers/machine/README.md`.
+- **`machine/pull-remote.sh <cache> <host>`** — the same box for a machine you're
+  not sitting at. It works only because `pull.sh` is self-contained, so it can be
+  streamed to the host (`ssh host bash -s -- <mktemp>`) and run there; the remote
+  installs nothing and keeps nothing. Output is passed through **verbatim** from
+  line 4 down — no re-thresholding, no reformatting, so one legend covers a local
+  and a remote box. Two things it does change, both deliberate: line 1 (the
+  epoch) is rewritten from the **local** clock, because that's the staleness
+  marker the renderer reads and a skewed remote clock would make the box
+  permanently stale or permanently fresh; and an unreachable host writes
+  **`warn`**, not `err` — `err` is the full-width red banner, and a laptop off
+  the VPN is a daily state, not an incident. It must still write *something*, or
+  a dead host sits there green on its last good reading. Hosts are one provider
+  dir each (`providers.d/machine-<host>/`), since title/order/flag are manifest
+  fields; the per-host `pull.sh` is a two-line `exec`.
 - **Open PRs** — has **no puller in this repo on purpose**: the `prs` command is
   work-specific, so the puller lives in the work-tooling repo and `pull.conf`
   points `PRS_PULL_CMD` at it. The puller takes a cache path as `$1` and writes

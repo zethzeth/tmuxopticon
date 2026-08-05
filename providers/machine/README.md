@@ -180,6 +180,58 @@ once a minute and `render` never fetches (see the repo README). For a live view
 while you are actively chasing something, reach for `htop` — this box is for
 noticing, not for profiling.
 
+## Watching another box
+
+The same table can be drawn for a machine you are *not* sitting at — a dev box,
+a build host, a VPS — as its own box in the sidebar, so "is that thing strained
+right now?" is a glance instead of an ssh.
+
+`pull-remote.sh <cache-file> <ssh-host>` does it, and installs nothing on the
+remote: `pull.sh` is self-contained, so it is streamed over the ssh channel with
+`bash -s`, run there, and its cache is `cat` back and deleted. The puller
+running on the remote is therefore always this checkout's file — there is no
+second copy to keep up to date.
+
+It's one provider directory per host, because a box's title, stacking order and
+enable-flag are manifest fields. Drop this under
+`~/.config/tmuxopticon/providers.d/machine-<host>/`:
+
+```sh
+# provider.conf
+id=machine_devbox
+title=devbox            # the box heading — name it after the host
+flag=MACHINE_DEVBOX_PULL_ENABLED
+pull=pull.sh
+order=16                # 16 = directly under the local Machine box (15)
+timeout=25              # ssh handshake + pull.sh's 1s sampling window
+max_lines=0             # same reason as the local box: it's a table
+```
+
+```sh
+# pull.sh
+#!/usr/bin/env bash
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P)"
+exec "$HERE/../../tmuxopticon/providers/machine/pull-remote.sh" "$1" "devbox"
+```
+
+(that relative path assumes the provider dir is a symlink into a repo beside the
+plugin — point it at wherever your checkout actually is)
+
+then `MACHINE_DEVBOX_PULL_ENABLED=true` in `pull.conf`. Notes:
+
+- **Give the host a `ControlMaster` block** in `~/.ssh/config`. The collector
+  connects once a minute; with `ControlPersist` that is a ~0.1s reuse instead of
+  a ~1s handshake.
+- **Key auth only.** The puller runs from cron under `BatchMode=yes`, so
+  anything that would prompt fails instead of hanging.
+- **The epoch is rewritten with the local clock**, so `Last sync` stays honest
+  even if the remote's clock is skewed.
+- **Unreachable is `warn`, not `err`** — a red dot and the ssh error as the
+  detail line, not the full-width red banner. Being off the VPN is an ordinary
+  daily state, not an incident. And it is never silently the last good reading.
+- The remote reading is only as good as what `pull.sh` can see there: a
+  container or a VM without PSI simply draws a shorter table (see **Legend**).
+
 ## macOS
 
 Reduced but honest: cpu, memory, disk, and the application rows work. No `stall`
