@@ -3,7 +3,8 @@
 A toggleable left **sidebar for tmux** that watches every session at once —
 showing each session's name, the working directory of every split, and the
 **live status of Claude Code** in each pane: `● working`, `◐ waiting`, or
-`○ done`.
+`○ done` — down to the running tool and how long it has been at it, for a
+Claude that emits the [status marker](#the-marker-preferred).
 
 Run a fleet of Claude Code sessions across many tmux sessions and you lose
 track of which ones are grinding, which are blocked on a prompt, and which
@@ -169,29 +170,62 @@ right away instead of waiting out the redraw interval.
 
 ## How status is detected
 
-Each pane is classified by what Claude Code is showing:
+Two ways, in that order of preference: Claude can **tell** tmuxopticon what it
+is doing, and failing that tmuxopticon **reads the screen**.
 
-- **working** — a braille spinner (`U+2800`–`U+28FF`) is animating in the pane
-  *title*, or the footer reads `esc to interrupt`. The title check survives
-  narrow splits where the footer text gets truncated.
+### The marker (preferred)
+
+If a pane's text anywhere contains a marker of the form
+
+```
+⟨<state> [detail] <pretty> t<epoch>⟩
+```
+
+tmuxopticon believes it over anything it could infer. `<state>` is one of
+`working`, `waiting`, `blocked`, `asking`, `idle`, `done`; `detail` is a short
+free word shown in the sidebar cell (a tool name, say); `t<epoch>` is unix
+seconds for when that state began, and `<pretty>` is ignored here — tmuxopticon
+ages the epoch itself on every frame, so the time keeps ticking even when
+whatever printed the marker has stopped repainting.
+
+```
+ 3 ● Bash 72s    ~/code/app      working, running Bash, 72s into the turn
+ 2 ◐ perm 8s     api1:~/api      blocked on a permission prompt
+ 4 ○ done 12m    ~/code/dotfiles finished twelve minutes ago
+```
+
+The natural place to print it is a Claude Code **`statusLine`** command, fed by
+`Stop` / `UserPromptSubmit` / `PreToolUse` hooks. Put it **leftmost** on the
+line so a narrow split truncates something else. Because the marker lives in the
+pane's *text* rather than in a tmux option, it also survives **SSH** — the hooks
+run on the far box and the state rides home in the pixels, which a
+`set-option -p` on the remote tmux could never do.
+
+### Reading the screen (fallback)
+
+With no marker, each pane is classified by what Claude Code is showing. The
+**last** matching line in the pane wins, since earlier ones are previous turns:
+
+- **working** — the footer reads `esc to interrupt`, or the spinner line carries
+  a live token count (`… ↓ 3.0k tokens)`), or a tool is showing `Waiting…`. A
+  braille spinner (`U+2800`–`U+28FF`) animating in the pane *title* also counts.
 - **waiting** — the pane is asking a question (`do you want…`, `would you
-  like…`, or any selection/question prompt showing `esc to cancel` in its
-  footer).
-- **done** — Claude is idle at its prompt (`? for shortcuts`, `shift+tab to
-  cycle`, `auto mode on`).
+  like…`, or any selection prompt showing `esc to cancel`).
+- **done** — the spinner line has settled into `· done H:MM`.
+
+This half is UI-text sniffing and it *will* drift as Claude's interface changes —
+that is exactly why the marker exists. Note what is deliberately **not** keyed
+on: `auto mode on` and `shift+tab to cycle` sit at the bottom of the pane whether
+Claude is grinding or idle, so treating them as "done" makes every session read
+done forever.
 
 Whether a pane is Claude at all is decided first by its foreground process
 (`pane_current_command` is `claude`) and, failing that, by the glyph Claude stamps
-on the pane **title** (`✳` when idle, a braille spinner while working). Both are
-robust — they keep working even if you run a **custom Claude `statusLine`** that
-replaces the default `? for shortcuts` hint, and the title glyph also catches a
-Claude running **over SSH**, where the local command is just `ssh`. The
-working/waiting/done split above is then refined from the UI text; a Claude pane
-that matches none of it is shown as `done` (idle). So a future UI redesign may need
-the *state* patterns in `tmuxopticon.sh` updated, but Claude panes won't be missed
-entirely — a remote Claude shows `working`/`waiting`/`done` like a local one, and
-only a remote pane that *isn't* Claude (a plain shell, titled `user@host:path`)
-shows `⇄ remote`.
+on the pane **title** (`✳`). Both are robust — they survive a custom `statusLine`,
+and the title glyph also catches a Claude running **over SSH**, where the local
+command is just `ssh`. A Claude pane that matches no state cue at all is shown as
+`done` (idle), so Claude panes are never missed entirely; only a remote pane that
+*isn't* Claude (a plain shell, titled `user@host:path`) shows `⇄ remote`.
 
 A pane **not** running Claude is labelled by what it *is*, which is robust (no
 UI sniffing): **nvim** when the foreground command is `nvim`/`vim`, **remote**

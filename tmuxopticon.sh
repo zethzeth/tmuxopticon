@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tmuxopticon.sh — a toggleable left tmux sidebar that watches every session
-# at once: split counts and live Claude Code status (working / waiting / done).
+# at once: split counts and live Claude Code status (working / waiting / done,
+# with the running tool and how long it has been at it when Claude reports it).
 #
 # Single file, no daemon. Subcommands:
 #   toggle      open the sidebar pane (left) in the current window — plus the
@@ -130,18 +131,44 @@ split_count() { # split_count <session> -> pane count excluding the sidebar itse
   tmux list-panes -t "$1" -F '#{pane_title}' 2>/dev/null | grep -vcx "$SIDEBAR_TITLE"
 }
 
+# --- how a Claude pane's state is read -------------------------------------
+# Both classifiers below go through these two, so the patterns live in exactly
+# one place. They drifted apart once and it cost every pane its status.
+
+pane_marker() { # <pane content> -> "<state> [detail] <pretty> t<epoch>", else ''
+  # Claude's own answer rather than a guess about it: a statusline can paint a
+  # ⟨…⟩ marker into the pane (README: "How status is detected"). Because it
+  # lives in the pane's *text* it rides home over SSH, where a tmux option set
+  # by a hook on the far box never could. Splitting on the brackets with awk
+  # keeps this byte-wise — no locale or grep-flavour assumptions.
+  local m
+  m="$(printf '%s' "$1" | awk -F'⟨' 'NF>1 { split($2, a, "⟩"); m=a[1] } END { print m }')"
+  case "$m" in working*|waiting*|blocked*|asking*|done*|idle*) printf '%s' "$m";; esac
+}
+
+pane_scraped() { # <pane content> -> working|waiting|done|'' from Claude's UI text
+  # Fallback for a Claude with no marker. Last match in the buffer wins — the
+  # lines above it are previous turns. Never key `done` off "auto mode on" or
+  # "shift+tab to cycle": those show whether Claude is grinding or idle.
+  printf '%s' "$1" | awk '
+    /esc to interrupt/ || /tokens\)/ || /Waiting…/    { s="working" }
+    /· done [0-9]+:[0-9][0-9]/                        { s="done" }
+    /Do you want|Would you like|esc to cancel/        { s="waiting" }
+    END { print s }'
+}
+
 session_status() { # -> working|waiting|done|""  (worst-case across the session's panes)
-  local sess="$1" worst='' pane content
+  local sess="$1" worst='' pane content st
   while IFS= read -r pane; do
     [ -n "$pane" ] || continue
     content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
-    if printf '%s' "$content" | grep -qiF 'esc to interrupt'; then
-      printf 'working'; return
-    elif printf '%s' "$content" | grep -qiE 'do you want|would you like|esc to cancel'; then
-      worst='waiting'
-    elif printf '%s' "$content" | grep -qiE 'shift\+tab to cycle|\? for shortcuts|auto mode on'; then
-      [ "$worst" = 'waiting' ] || worst='done'
-    fi
+    st="$(pane_marker "$content")"; st="${st%% *}"
+    [ -n "$st" ] || st="$(pane_scraped "$content")"
+    case "$st" in
+      working)                printf 'working'; return;;
+      waiting|blocked|asking) worst='waiting';;
+      done|idle)              [ "$worst" = 'waiting' ] || worst='done';;
+    esac
   done < <(tmux list-panes -t "$sess" -F '#{pane_id} #{pane_title}' 2>/dev/null \
              | awk -v t="$SIDEBAR_TITLE" '$2 != t { print $1 }')
   printf '%s' "$worst"
@@ -162,12 +189,24 @@ pane_path() { # <pane_id> -> the pane's path for display
   printf '%s%s' "$host" "$rest"
 }
 
-session_pane_rows() { # one "<pane_index>\t<status>\t<path>" line per non-sidebar pane.
+fmt_age() { # seconds -> 45s / 12m / 2h5m — short enough for the sidebar cell
+  if   [ "$1" -lt 120 ];  then printf '%ss' "$1"
+  elif [ "$1" -lt 3600 ]; then printf '%sm' "$(( $1 / 60 ))"
+  else                         printf '%sh%sm' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))"
+  fi
+}
+
+session_pane_rows() { # one "<pane_index>\037<status>\037<label>\037<path>" line per non-sidebar pane.
   # pane_index is tmux's own per-window number (what `prefix q` / the pane border
   # show), so the sidebar row lines up with the on-screen pane. status is
-  # working|waiting|done (Claude panes) or nvim|remote|local (plain terminals).
-  # path comes from pane_path (host:~/path on SSH).
-  local sess="$1" line pidx pane rest cmd title content stat ppath claude
+  # working|waiting|blocked|asking|idle|done (Claude panes) or nvim|remote|local
+  # (plain terminals). label is the marker's live detail ("Bash 72s"), empty when
+  # there is none. path comes from pane_path (host:~/path on SSH). Fields are
+  # \037-separated, not tab: label is routinely empty, and tab is IFS whitespace,
+  # so `read` would swallow the empty field and shift path into it.
+  local sess="$1" line pidx pane rest cmd title content stat ppath claude \
+        marker scraped lbl melapsed mepoch mrest mdetail
+  local now; now="$(date +%s)"
   while IFS= read -r line; do
     pidx="${line%% *}"; line="${line#* }"   # peel pane_index, then pane_id, then
     pane="${line%% *}"; rest="${line#* }"   # the command, leaving pane_title
@@ -187,27 +226,47 @@ session_pane_rows() { # one "<pane_index>\t<status>\t<path>" line per non-sideba
     # (via the claude=1 branch below) instead of falling through to `⇄ remote`. A
     # plain remote shell's title is `user@host:path`, with no such glyph.
     if printf '%s' "$title" | perl -CSD -ne 'exit(/[\x{2733}\x{2800}-\x{28ff}]/?0:1)' 2>/dev/null; then claude=1; fi
-    # working: Claude animates a braille spinner (U+2800–U+28FF) in the pane title.
-    # The title isn't truncated by pane width, so this survives narrow splits where
-    # the footer's "esc to interrupt" gets cut off (leaving only the "done" markers).
-    if printf '%s' "$title" | perl -CSD -ne 'exit(/[\x{2800}-\x{28ff}]/?0:1)' 2>/dev/null; then stat=working
+    content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
+    marker="$(pane_marker "$content")"
+    # The scrape earns its keep twice over: panes whose Claude has no marker,
+    # and overruling a marker that froze (see below).
+    scraped="$(pane_scraped "$content")"
+    if [ -n "$marker" ]; then
+      stat="${marker%% *}"
+      # A statusline only repaints when Claude repaints. If it stalled mid-turn
+      # the pane's own "· done H:MM" line is the fresher truth, so let it win.
+      if [ "$stat" = working ] && [ "$scraped" = done ]; then stat=done; marker=''; fi
+    # Older Claude builds animated a braille spinner (U+2800–U+28FF) in the pane
+    # title instead. Kept as a positive tell: the title survives narrow splits.
+    elif printf '%s' "$title" | perl -CSD -ne 'exit(/[\x{2800}-\x{28ff}]/?0:1)' 2>/dev/null; then stat=working
+    elif [ -n "$scraped" ]; then stat="$scraped"
+    elif [ "$claude" = 1 ]; then stat=done   # a Claude pane sitting idle: command says claude, no working/waiting cue
     else
-      content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
-      if   printf '%s' "$content" | grep -qiF 'esc to interrupt'; then stat=working
-      elif printf '%s' "$content" | grep -qiE 'do you want|would you like|esc to cancel'; then stat=waiting
-      elif printf '%s' "$content" | grep -qiE 'shift\+tab to cycle|\? for shortcuts|auto mode on'; then stat=done
-      elif [ "$claude" = 1 ]; then stat=done   # a Claude pane sitting idle: command says claude, no working/waiting cue
-      else
-        # Not a Claude pane — label the terminal itself. nvim wins on the
-        # foreground command; an SSH pane shows a "host:" prefix in its path
-        # (set via @cwd); everything else is a plain local shell.
-        case "$cmd" in
-          nvim|vim|view|nvi) stat=nvim;;
-          *) case "$ppath" in *:*) stat=remote;; *) stat=local;; esac;;
-        esac
-      fi
+      # Not a Claude pane — label the terminal itself. nvim wins on the
+      # foreground command; an SSH pane shows a "host:" prefix in its path
+      # (set via @cwd); everything else is a plain local shell.
+      case "$cmd" in
+        nvim|vim|view|nvi) stat=nvim;;
+        *) case "$ppath" in *:*) stat=remote;; *) stat=local;; esac;;
+      esac
     fi
-    printf '%s\t%s\t%s\n' "$pidx" "$stat" "$ppath"
+    # Sidebar cell text, parsed right-to-left so the detail may be absent:
+    # "working Bash 5m t1787920777" -> "Bash 3m", "done 0s t…" -> "done 12m".
+    # The trailing t<epoch> is aged here rather than trusting the statusline's
+    # own "5m": that line only repaints when Claude repaints, so its number
+    # freezes the moment a turn ends — exactly when you most want it ticking.
+    lbl=''
+    case "$marker" in
+      *\ t[0-9]*)
+        mepoch="${marker##*t}"; mrest="${marker% *}"     # drop t<epoch>
+        melapsed="${mrest##* }"; mrest="${mrest% *}"     # drop the statusline's stale elapsed
+        mdetail="${mrest#* }"; [ "$mdetail" = "$mrest" ] && mdetail=''
+        case "$mepoch" in
+          [0-9]*) melapsed="$(fmt_age $(( now - mepoch )))";;
+        esac
+        lbl="${mdetail:-${marker%% *}} $melapsed";;
+    esac
+    printf '%s\037%s\037%s\037%s\n' "$pidx" "$stat" "$lbl" "$ppath"
   done < <(tmux list-panes -t "$sess" -F '#{pane_index} #{pane_id} #{pane_current_command} #{pane_title}' 2>/dev/null | awk -v t="$SIDEBAR_TITLE" '$4 != t { print }')
 }
 
@@ -446,7 +505,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
 
   # --- build the frame + a row->session map, then paint once (no flicker) ---
   # \033[K clears each line to its end; \033[J clears any leftover rows below.
-  local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat ppath seg segp col pad budget gap line numpfx nlen=3 prow=0
+  local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
   cur="$(current_session)"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
@@ -485,23 +544,34 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
     fi
     # one line per split: "<icon> <label>   <path>" — Claude state for Claude
     # panes, terminal type (nvim/remote/shell) for the rest.
-    while IFS=$'\t' read -r pidx stat ppath; do
+    while IFS=$'\037' read -r pidx stat lbl ppath; do
       [ "$prow" -ge "$avail" ] && break 2           # no room left before the box
       case "$stat" in
-        working) seg="${C_WORK}● working${C_RESET}";   segp='● working';;
-        waiting) seg="${C_WAIT}◐ waiting${C_RESET}";   segp='◐ waiting';;
-        done)    seg="${C_DONE}○ done${C_RESET}";      segp='○ done';;
-        nvim)    seg="${C_NVIM}N nvim${C_RESET}";       segp='N nvim';;
-        remote)  seg="${C_REMOTE}⇄ remote${C_RESET}";  segp='⇄ remote';;
-        local)   seg="${C_DIM}\$ shell${C_RESET}";     segp='$ shell';;
-        *)       seg=''; segp='';;
+        working)                glyph='●'; scol="$C_WORK";   defl='working';;
+        waiting|asking|blocked) glyph='◐'; scol="$C_WAIT";   defl='waiting';;
+        done|idle)              glyph='○'; scol="$C_DONE";   defl='done';;
+        nvim)                   glyph='N'; scol="$C_NVIM";   defl='nvim';;
+        remote)                 glyph='⇄'; scol="$C_REMOTE"; defl='remote';;
+        local)                  glyph='$'; scol="$C_DIM";    defl='shell';;
+        *)                      glyph='';  scol='';          defl='';;
       esac
+      # Claude panes show the marker's live detail ("● Bash 72s"); everything
+      # else just names itself. Capped at the col width reserved below.
+      if [ -n "$glyph" ]; then
+        case "$stat" in
+          nvim|remote|local) segp="$glyph $defl";;
+          *)                 segp="$glyph ${lbl:-$defl}";;
+        esac
+        segp="${segp:0:13}"; seg="${scol}${segp}${C_RESET}"
+      else
+        segp=''; seg=''
+      fi
       # Lead each pane row with tmux's pane_index (right-aligned in 2 cols) — the
       # same number `prefix q` flashes and the pane border shows, so a row maps to
       # an on-screen pane at a glance. nlen=3 accounts for "NN " in the width math.
       printf -v numpfx '%2s ' "$pidx"
       if [ -n "$segp" ]; then                           # Claude pane: status column + path
-        col=10; pad=$(( col - ${#segp} )); [ "$pad" -lt 1 ] && pad=1
+        col=13; pad=$(( col - ${#segp} )); [ "$pad" -lt 1 ] && pad=1
         budget=$(( tw - nlen - col )); [ "$budget" -lt 1 ] && budget=1
         printf -v gap '%*s' "$pad" ''
         line="${C_DIM}${numpfx}${C_RESET}${seg}${gap}${C_DIM}${ppath:0:budget}${C_RESET}"
@@ -773,6 +843,8 @@ help() { # print the key bindings (querying tmux for the live prefix key)
   cat <<EOF
 ${C_BOLD}tmuxopticon${C_RESET} — a live left sidebar watching every tmux session.
 claude per split:  ${C_WORK}● working${C_RESET}   ${C_WAIT}◐ waiting${C_RESET}   ${C_DONE}○ done${C_RESET}
+                   a Claude whose statusline emits a ⟨state detail epoch⟩ marker
+                   shows the live detail instead: ${C_WORK}● Bash 72s${C_RESET}, ${C_DONE}○ done 12m${C_RESET}
 plain  per split:  ${C_NVIM}N nvim${C_RESET}   ${C_REMOTE}⇄ remote${C_RESET}   ${C_DIM}\$ shell${C_RESET}
 
 prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.

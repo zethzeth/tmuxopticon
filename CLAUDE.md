@@ -46,7 +46,9 @@ character-class globs (`[Bb][Ll][Oo][Cc][Kk]*`).
   sorted, `\037`-separated row per provider (id, title, flag, pull, pull_cmd_var,
   timeout, throttle_min, order, dir). **`\037` (US), not tab**: tab is
   IFS-whitespace, so `read` would coalesce delimiters around an empty middle
-  field (e.g. a BYO provider's blank `pull`) and shift columns. Adding a provider
+  field (e.g. a BYO provider's blank `pull`) and shift columns. `session_pane_rows`
+  in `tmuxopticon.sh` learned the same lesson the hard way when its usually-empty
+  `label` field was added — it uses `\037` too. Adding a provider
   touches **no core file** — it's pure data discovery.
 - `providers/` — the status-panel machinery, all running *outside* the render
   loop (from cron):
@@ -383,15 +385,23 @@ caveat below); a plain remote shell's title is `user@host:path`, with no such gl
 Both tells are immune to UI changes and to a custom `statusLine` (which replaces the
 `? for shortcuts` hint, so an idle Claude pane would otherwise scrape as a plain
 shell). The finer `working` / `waiting` / `done` split is still matched
-against Claude's **current UI text** (`esc to interrupt`, `do you want`/`would you
-like` / `esc to cancel`, `? for shortcuts` / `shift+tab to cycle` / `auto mode on`)
-plus a
+against a **`⟨state detail pretty t<epoch>⟩` marker** in the pane text when one is
+there (README: "How status is detected"), and only otherwise against Claude's
+current UI text — `esc to interrupt`, a live token count on the spinner line,
+`· done H:MM`, `do you want`/`would you like`/`esc to cancel` — plus a
 braille-spinner (U+2800–U+28FF) check on the pane *title* (survives narrow splits
 where the footer truncates). A Claude pane that matches none of those — idle under
 a custom statusLine — falls back to `done` precisely *because* the command is
-`claude`. A Claude Code UI redesign can still break the working/waiting/done split
-— update the patterns in `session_status` / `session_pane_rows` when that happens —
-but presence detection no longer depends on it.
+`claude`.
+
+**Never key `done` off `auto mode on` / `shift+tab to cycle` / `? for shortcuts`
+again.** Those sit at the bottom of the pane whether Claude is grinding or idle,
+so in 2026-08 they pinned every pane to `done` at the same moment both *working*
+tells (title spinner, `esc to interrupt`) disappeared from the UI. Three tells that
+looked independent were all describing one footer, and it got redrawn as a unit.
+The marker exists so a UI redesign degrades instead of inverting; scrape patterns
+in `session_status`/`session_pane_rows` are the fallback, and they take the **last**
+match in the buffer because earlier ones are previous turns.
 
 Caveat: a Claude session running **over SSH** reports `pane_current_command == ssh`
 locally, so the command tell fails for those. Presence then rests on the title glyph
