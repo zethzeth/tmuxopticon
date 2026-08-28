@@ -60,6 +60,32 @@ C_BLOCKED=$'\033[1;31m' # bold red — a note starting with "BLOCK…" (you're s
 C_DOWN=$'\033[31m'   # red — a status provider reporting trouble (e.g. a down monitor)
 C_ALERT=$'\033[1;97;41m'  # bold bright-white ON red — the loud error banner text
 C_ALERTBAR=$'\033[41m'    # solid red background — the error banner's top/bottom bars
+
+# Per-row severity, for a provider whose box is a TABLE rather than a headline.
+# The box-level `state` colours the summary line, which is the right granularity
+# when a provider reports one thing — but a table has rows that are fine sitting
+# next to rows that are not, and dimming all of them equally throws that away.
+#
+# A detail line may therefore open with SOH (0x01) + one letter picking its
+# colour: g green, y yellow, r red. Anything else, or no marker at all, keeps
+# the default dim. The marker is STRIPPED before the line is measured, which is
+# the whole reason it is a control character rather than something like "[r]":
+# these rows are printf-aligned columns, and a visible prefix would either shift
+# the alignment or have to be counted out of the truncation width by every
+# caller. SOH also cannot collide with real content — no provider emits it.
+DETAIL_MARK=$'\001'
+detail_split() { # detail_split <line> -> sets DL_COL + DL_TEXT
+  DL_COL="$C_DIM"; DL_TEXT="$1"
+  case "$1" in
+    "$DETAIL_MARK"?*)
+      case "${1:1:1}" in
+        g) DL_COL="$C_DONE";;
+        y) DL_COL="$C_WORK";;
+        r) DL_COL="$C_DOWN";;
+      esac
+      DL_TEXT="${1:2}";;
+  esac
+}
 SELF="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)/$(basename "$0")"
 ROWMAP="/tmp/tmuxopticon.rows.${UID:-0}"   # row -> session-index map (for click)
 
@@ -341,7 +367,8 @@ current_session() { # the session owning this sidebar pane
 #   line1  epoch          (for the staleness check)
 #   line2  state          ok | warn | err
 #   line3  summary        the headline shown next to the icon
-#   line4+ detail lines   shown dimmed + indented (optional)
+#   line4+ detail lines   shown dimmed + indented (optional). A line may open
+#                         with SOH + g|y|r to colour that row — see DETAIL_MARK.
 
 # --- render-loop caches -------------------------------------------------------
 #
@@ -403,7 +430,7 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
   # provider whose output is a bounded table (the Machine box), truncating is
   # always wrong — the hidden rows are as load-bearing as the shown ones, and
   # "+5 more" in a box you can't expand is just a worse version of the data.
-  local stale now epoch state summary line details=() idx=0 shown=0 div age icon col bar pad staleline synctime
+  local stale now epoch state summary line details=() idx=0 shown=0 div age icon col bar pad staleline synctime DL_COL DL_TEXT
   stale="$(opt @tmuxopticon-provider-stale 180)"       # cron refreshes ~every 60s; flag if cold
   printf -v div '%*s' "$tw" ''; div="${div// /─}"
   # Read the whole cache first, so the renderer can pick a layout from the state
@@ -432,7 +459,11 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
     bline "⚠ ${summary}"
     for line in "${details[@]}"; do                              # details, still on red
       [ "$max" -gt 0 ] && [ "$shown" -ge "$max" ] && break
-      [ -n "$line" ] && bline "  ${line}"; shown=$((shown + 1))
+      # Severity markers are stripped, not honoured: the banner is already a
+      # solid red field, and a green row on it would be both unreadable and a
+      # contradiction — inside an `err` box the box IS the verdict.
+      detail_split "$line"
+      [ -n "$DL_TEXT" ] && bline "  ${DL_TEXT}"; shown=$((shown + 1))
     done
     printf '%s\n' "${C_ALERTBAR}${bar}${C_RESET}"                 # bottom bar
     [ -n "$staleline" ] && printf '%s\n' "$staleline"
@@ -452,7 +483,9 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
   for line in "${details[@]}"; do                       # detail lines: dimmed, indented, capped
     [ "$max" -gt 0 ] && [ "$shown" -ge "$max" ] && break
     if [ -n "$line" ]; then
-      printf '%s\n' "${C_DIM}   ${line:0:$((tw-3))}${C_RESET}"
+      # Truncate the STRIPPED text: the marker is not part of the column budget.
+      detail_split "$line"
+      printf '%s\n' "${DL_COL}   ${DL_TEXT:0:$((tw-3))}${C_RESET}"
     else
       printf '\n'   # an empty detail line is a deliberate spacer row, not a no-op:
     fi              # a provider that draws a small table needs to group its rows

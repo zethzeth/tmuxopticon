@@ -112,6 +112,7 @@ mem_used_k=''; mem_total_k=''; mem_pct=''; swap_used_k=''; swap_total_k=''
 gpu_busy=''; cpu_temp=''
 psi_cpu=''; psi_io=''; psi_mem=''
 disk_pct=''; net_rx=''; net_tx=''; forks_s=''; swapin_s=''; dev_busy=''
+link_rtt=''; link_loss10=''; link_lag=''
 top1=''; top2=''; top3=''
 
 # ------------------------------------------------------------------ collectors
@@ -141,6 +142,62 @@ net_bytes() { # -> "rx tx" totalled over physical interfaces
   ' /proc/net/dev 2>/dev/null
 }
 
+# ---------------------------------------------------------------- the ssh link
+#
+# The rows above answer "is this BOX slow". These two answer a question the box
+# cannot: "is the LINK to it slow" — which, when you are reading this table over
+# ssh from somewhere else, is just as often the thing that actually hurts. A
+# perfectly idle machine on a lossy path types like treacle, and every /proc
+# reading on it stays green while it happens.
+#
+# Nothing extra is measured to get this. When pull.sh is run over ssh (which is
+# exactly what pull-remote.sh does for a remote box), the kernel on THIS side is
+# already keeping a full TCP record of the connection carrying the reading, and
+# `ss -ti` hands it over for free. Locally SSH_CONNECTION is unset, no socket is
+# examined, and the rows are simply never emitted — the local Machine box is
+# unchanged.
+#
+# Which socket? The one with the deepest send queue among the ssh connections
+# back to this client. With ControlMaster the interactive session and this
+# puller usually ARE one TCP connection; where they are not, the busiest one is
+# the one whose backlog your next keystroke would queue behind — which is the
+# thing being measured. Loss is summed across all of them, because they share a
+# path and one sample is thin.
+link_sample() { # -> "sent retrans maxsendq rtt_ms deliv_Bps" for the client link
+  [ -n "${SSH_CONNECTION:-}" ] || return 0
+  command -v ss >/dev/null 2>&1 || return 0
+  set -- $SSH_CONNECTION
+  local cip="${1:-}" sport="${4:-}"
+  [ -n "$cip" ] && [ -n "$sport" ] || return 0
+  # No `state` filter: with one, ss drops the State column and every field
+  # shifts left by one. Matching ESTAB in awk keeps the columns fixed.
+  ss -tin "( sport = :$sport )" 2>/dev/null | awk -v peer="$cip" '
+    function bps(s,   v) {           # "3.05Mbps" -> bytes/sec
+      v = s + 0
+      if      (s ~ /Gbps$/) v *= 1000000000
+      else if (s ~ /Mbps$/) v *= 1000000
+      else if (s ~ /[kK]bps$/) v *= 1000
+      return v / 8
+    }
+    # A socket line names the peer; the tcp-info line is the one after it.
+    # peer ":" and not bare peer, so 10.0.0.13 cannot match 10.0.0.139:22.
+    /ESTAB/ && index($0, peer ":") { sq = $3 + 0; want = 1; next }
+    want && /rtt:/ {
+      want = 0
+      rtt = ""; dr = 0
+      for (i = 1; i <= NF; i++) {
+        if      ($i ~ /^rtt:/)           { split(substr($i, 5), a, "/"); rtt = a[1] }
+        else if ($i ~ /^bytes_sent:/)    { sent    += substr($i, 12) + 0 }
+        else if ($i ~ /^bytes_retrans:/) { retrans += substr($i, 15) + 0 }
+        else if ($i == "delivery_rate")  { dr = bps($(i + 1)) }
+      }
+      if (sq >= maxsq) { maxsq = sq; brtt = rtt; bdr = dr }
+      seen = 1
+    }
+    END { if (seen) printf "%d %d %d %.1f %d", sent, retrans, maxsq, brtt + 0, bdr + 0 }
+  '
+}
+
 collect_linux_pre() { # first half of every delta-based reading
   read -r _ s_user s_nice s_sys s_idle s_iow s_irq s_soft s_steal _ < /proc/stat
   pre_total=$(( s_user + s_nice + s_sys + s_idle + s_iow + s_irq + s_soft + s_steal ))
@@ -160,6 +217,13 @@ collect_linux_pre() { # first half of every delta-based reading
   pre_devticks="$(awk '{ t += $10 } END { print t + 0 }' /sys/block/nvme*/stat /sys/block/sd*/stat 2>/dev/null)"
 
   set -- $(net_bytes); pre_rx="${1:-0}"; pre_tx="${2:-0}"
+
+  # Sampled twice like every other rate in this file, and for the usual reason:
+  # bytes_sent/bytes_retrans are counters for the LIFE of the connection, and a
+  # ControlMaster socket lives for minutes. Lifetime loss reports a burst from
+  # ten minutes ago as if it were happening now — the delta reports the link you
+  # are typing on this second.
+  link_pre="$(link_sample)"
 
   # Intel (xe) exposes GPU *idle* residency in ms; busy% is what it didn't idle.
   gpu_idle_file=''
@@ -203,6 +267,39 @@ collect_linux_post() { # second half — turn the two samples into rates
   if [ "$SAMPLE" -gt 0 ] && [ "$post_rx" -ge "${pre_rx:-0}" ]; then
     net_rx=$(( (post_rx - pre_rx) / SAMPLE ))
     net_tx=$(( (post_tx - pre_tx) / SAMPLE ))
+  fi
+
+  # The ssh link, turned into the two numbers you can act on.
+  local link_post link_sent
+  link_post="$(link_sample)"
+  if [ -n "${link_pre:-}" ] && [ -n "$link_post" ]; then
+    set -- $link_pre;  local p_sent="$1" p_retr="$2"
+    set -- $link_post; local q_sent="$1" q_retr="$2" sendq="$3" rtt="$4" deliv="$5"
+    link_rtt="$(awk -v r="$rtt" 'BEGIN { printf "%d", r + 0.5 }')"
+    [ "$link_rtt" = 0 ] && link_rtt=''
+    # Loss over the window, in tenths of a percent (integer-only compares).
+    #
+    # Only computed once enough went over the wire for a ratio to MEAN anything.
+    # An idle ssh session sends a few dozen packets a second, so a single
+    # retransmit among them is 4%, and the row would sit there glowing red about
+    # a link that is perfectly fine — the same cry-wolf failure the io-pressure
+    # figure was pulled out of the verdict for. Below the floor the row shows rtt
+    # alone and is judged on rtt alone, which is honest: we did not measure
+    # enough to have an opinion about loss.
+    link_sent="$(( q_sent - p_sent ))"
+    if [ "$link_sent" -ge 65536 ]; then
+      link_loss10="$(awk -v s="$link_sent" -v r="$(( q_retr - p_retr ))" \
+        'BEGIN { if (r < 0) r = 0; printf "%d", (r * 1000 / s) + 0.5 }')"
+    fi
+    # THE row. Send-Q is every byte the kernel still owes this client — already
+    # written by the shell over there, not yet acknowledged here. Divided by the
+    # rate the path is actually delivering, it is a time: how long your next
+    # keystroke waits before its echo can even leave the box. It is what makes a
+    # 0 K/s reading and a 300 K/s reading mean different things, which a
+    # throughput row alone can never do.
+    if [ -n "$deliv" ] && [ "$deliv" -gt 0 ]; then
+      link_lag="$(awk -v q="$sendq" -v d="$deliv" 'BEGIN { printf "%d", (q * 1000 / d) + 0.5 }')"
+    fi
   fi
 
   if [ -n "$gpu_idle_file" ]; then
@@ -494,6 +591,12 @@ gte() { # gte <a> <b> -> echoes 1 when a >= b, else 0 (empty a = 0)
 # What replaces it is the mechanism, not the symptom: pages being faulted back
 # in from swap is what you actually wait for, and a saturated device is what a
 # real storage problem looks like. Both are things you can act on.
+# The link goes FIRST, and only ever fires for a box being read over ssh. When
+# your keystrokes are a third of a second behind your fingers, that is the
+# headline no matter how comfortable the box's own /proc looks — and it is the
+# one case where a machine that is genuinely idle should still read as "slow",
+# because that is the truth of using it. Every check below it is about the box.
+warn_if "$(gte "$link_lag" 300)" "ssh lag ${link_lag}ms"
 warn_if "$(gte "$psi_mem" 5)"   "memory stall ${psi_mem}%"
 warn_if "$(gte "$swapin_s" 400)" "swap thrash $(( ${swapin_s:-0} * 4 / 1024 ))M/s"
 [ "$(gte "$dev_busy" 60)" = 1 ] && warn_if "$(gte "$psi_io" 40)" "disk busy ${dev_busy}%"
@@ -548,6 +651,26 @@ row() { # row <label> <level…>  — the two-column contract, in one place
   add "$(printf '%-7s %s' "$1" "$2")"
 }
 
+# Same contract, plus a severity the renderer paints the row with (g/y/r; see
+# DETAIL_MARK in tmuxopticon.sh). Used ONLY where the number carries a verdict
+# on its own. Most rows here deliberately don't: `cpu 90%` is a machine doing
+# its job, and colouring it red would cry wolf every compile.
+MARK=$(printf '\001')
+row_c() { # row_c <g|y|r> <label> <level…>
+  add "${MARK}${1}$(printf '%-7s %s' "$2" "$3")"
+}
+
+worst() { # worst <sev> <sev> -> the more severe of the two
+  case "$1$2" in *r*) printf 'r';; *y*) printf 'y';; *) printf 'g';; esac
+}
+
+band() { # band <value> <yellow-at> <red-at> -> g|y|r  (empty value = g)
+  case "${1:-}" in ''|*[!0-9]*) printf 'g'; return;; esac
+  if   [ "$1" -ge "$3" ]; then printf 'r'
+  elif [ "$1" -ge "$2" ]; then printf 'y'
+  else printf 'g'; fi
+}
+
 # TEMPERATURE is scaled 30°C→100°C rather than 0→100: nothing runs at 0°C, and
 # a bar that never leaves its first third is not a gauge, it's decoration.
 temp_pct() {
@@ -571,7 +694,41 @@ fi
 
 [ -n "$cpu_temp" ] && row temp "$(bar "$(temp_pct "$cpu_temp")") $(printf '%3s' "$cpu_temp")°C"
 
-[ -n "$net_rx" ] && row net "$(printf '↓%7s ↑%7s' "$(rate "$net_rx")" "$(rate "$net_tx")")"
+# Down and up on their own lines rather than sharing one. Two rates on one row
+# read as a single fact ("the network is doing 240K"), and they aren't one: the
+# direction is half the diagnosis. On a box you are reading over ssh, `upl` is
+# very largely YOUR screen — a terminal that will not keep up is visible here as
+# an upload that never drops, which is a different problem from a download that
+# never drops. Both stay uncoloured on purpose: there is no honest ceiling to
+# rank a throughput against (see README), and 0 K/s is not automatically good
+# nor 300 K/s automatically bad. The row that DOES judge is `lag`, below.
+if [ -n "$net_rx" ]; then
+  row dwnl "$(printf '↓%7s' "$(rate "$net_rx")")"
+  row upl  "$(printf '↑%7s' "$(rate "$net_tx")")"
+fi
+
+# --- the link you are reading this over (remote boxes only; see link_sample) ---
+#
+# Thresholds are set by what a keystroke feels like, not by what a network
+# engineer would call healthy:
+#   rtt   60ms is the point echo stops feeling immediate; 150ms is unpleasant.
+#   loss  0.5% already halves throughput on a long path; 2% collapses it.
+#   lag   50ms is under the noticing threshold; 200ms is "why is it doing that".
+if [ -n "$link_rtt" ] || [ -n "$link_lag" ]; then
+  if [ -n "$link_rtt" ]; then
+    lvl="$(printf '%sms' "$link_rtt")"
+    if [ -n "$link_loss10" ]; then
+      lvl="$lvl · $(printf '%d.%d' $(( link_loss10 / 10 )) $(( link_loss10 % 10 )))% loss"
+    fi
+    row_c "$(worst "$(band "$link_rtt" 60 150)" "$(band "${link_loss10:-0}" 5 20)")" link "$lvl"
+  fi
+  # Scaled 0–500ms across the bar: past half a second the exact number has
+  # stopped mattering and the colour is doing the talking.
+  if [ -n "$link_lag" ]; then
+    lagpct=$(( link_lag / 5 )); [ "$lagpct" -gt 100 ] && lagpct=100
+    row_c "$(band "$link_lag" 50 200)" lag "$(bar "$lagpct") $(printf '%4sms' "$link_lag") echo"
+  fi
+fi
 
 # Swap only earns a row once memory is genuinely under pressure. Swap merely
 # being *occupied* is normal — the kernel parks idle pages there and never

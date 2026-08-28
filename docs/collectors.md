@@ -25,6 +25,18 @@ line 3  summary        the headline shown next to the icon
 line 4+ detail lines   dimmed, indented (optional)
 ```
 
+A detail line may open with **SOH (`\001`) + one letter** to give that single
+row a colour: `g` green, `y` yellow, `r` red. Anything else keeps the default
+dim. The marker is stripped before the line is measured, so it costs no column
+width — which is why it is a control character rather than a visible prefix
+like `[r]`, since these rows are usually printf-aligned columns.
+
+Reach for it only where a number carries a verdict **on its own**. Most rows
+don't: `cpu 90%` is a machine doing its job, and colouring it red would cry
+wolf every compile. It exists for the case the box-level `state` can't express
+— a provider whose output is a *table*, where one row can be fine sitting next
+to one that isn't, and dimming both equally throws that distinction away.
+
 The sidebar maps `ok → ○` (green), `info → •` (neutral — a count/FYI, e.g. Open
 PRs), `warn → ●` (red), and renders `err` as a **full-width red banner** (so a
 real failure can't be missed). It shows `Last sync: H:MM (N min ago)` when a

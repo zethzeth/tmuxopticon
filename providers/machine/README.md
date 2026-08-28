@@ -22,7 +22,8 @@ MACHINE_PULL_ENABLED=true
    mem     ███░░░░░  35%  11/30G
    gpu     █░░░░░░░  13%
    temp    ███░░░░░  58°C
-   net     ↓ 660B/s ↑   1K/s
+   dwnl    ↓ 660B/s
+   upl     ↑   1K/s
    stall   cpu 8   io 11  mem 0
    spawn   1890/s
 
@@ -49,9 +50,18 @@ means you are at the thermal limit and the CPU is throttling itself.
 
 Two levels have no meaningful ceiling, so they show raw values instead:
 
-- **`net`** — bytes per second right now, `↓` down and `↑` up. There is no
-  honest "100%" to bar against (link speed isn't knowable), so it's a rate.
+- **`dwnl` / `upl`** — bytes per second right now, down and up. There is no
+  honest "100%" to bar against (link speed isn't knowable), so they're rates —
+  and for the same reason they are never coloured. `0 K/s` is not automatically
+  healthy and `300 K/s` is not automatically a problem; the row that actually
+  judges a link is `lag`, below.
 - **`spawn`** — new tasks per second. Same reason.
+
+They take a line each rather than sharing one because direction is half the
+diagnosis. Two rates on one row read as a single fact — "the network is doing
+240K" — and that is precisely the reading that hides which way it is going. On
+a box you are watching over ssh, `upl` is very largely *your own screen*, so a
+terminal that cannot keep up looks quite different from a download that cannot.
 
 ### The one that isn't obvious: `11/30G`
 
@@ -83,9 +93,52 @@ lower than what `free` or a system monitor reports.
 | `mem` | `/proc/meminfo` | Percent of RAM in use, plus used/installed in GB. See above. |
 | `gpu` | vendor-specific | GPU busy. NVIDIA via `nvidia-smi`, AMD via `gpu_busy_percent`, Intel Arc / `xe` via the inverse of idle residency. Absent on hardware with no unprivileged counter. |
 | `temp` | `coretemp` / `k10temp` / ACPI | CPU package temperature, barred 30–100°C. Sustained 90°C+ means the machine is slow *because* it is hot. |
-| `net` | `/proc/net/dev` delta | Throughput now, summed over physical interfaces. Loopback, docker, veth, bridges, VPN and tailscale are excluded — a container's traffic also crosses the real NIC, so counting both would double it. |
+| `dwnl` / `upl` | `/proc/net/dev` delta | Throughput now, down and up, summed over physical interfaces. Loopback, docker, veth, bridges, VPN and tailscale are excluded — a container's traffic also crosses the real NIC, so counting both would double it. |
 | `stall` | `/proc/pressure/*` | **Informational, not a verdict — see the warning below.** The percentage of the last 60 seconds that work was *actually lost* waiting for cpu, disk io, or memory. `cpu 100%` with `stall cpu 0` is a machine doing its job; `stall io 40` is a machine you are waiting on. `io` uses the kernel's `full` metric (everything stalled), `cpu` and `mem` use `some` (at least one task stalled). Linux only. |
 | `spawn` | `/proc/stat` `processes` delta | New tasks per second. The counter increments on every `clone()`, so threads count too. Shown only above 500/s. Tens per second is normal; thousands is a runaway poll loop — and it is the usual explanation for a box pegged in *system* time while no single process looks busy, because those tasks are far too short-lived for any sampler to catch. |
+
+### `link` and `lag` — the rows about the *connection*, not the box
+
+Every other row answers "is this **box** slow". These two answer the question
+the box cannot: **"is the link to it slow"** — and when you are reading the
+table over ssh from somewhere else, that is just as often the thing that
+actually hurts. A completely idle machine on a lossy path types like treacle,
+and every `/proc` reading on it stays green the whole time it happens.
+
+They appear **only when `pull.sh` is running over ssh**, which is exactly what
+`pull-remote.sh` arranges for a remote box. Locally `SSH_CONNECTION` is unset,
+no socket is inspected, and the rows are simply never drawn.
+
+| What | Reads | Means |
+| --- | --- | --- |
+| `link` | `ss -ti`, delta | Round-trip time to the client, and the share of bytes retransmitted **during the sample window**. Green under 60 ms and 0.5%; red past 150 ms or 2%. Loss is omitted entirely below 64 KB sent in the window — an idle session sends few enough packets that one retransmit reads as 4%, and a row glowing red about a healthy link is worse than a row that admits it didn't measure enough to have an opinion. |
+| `lag` | `ss -ti` Send-Q ÷ delivery rate | **How long your next keystroke waits before its echo can even leave the box.** Green under 50 ms, red past 200 ms. Barred 0–500 ms. |
+
+`lag` is the one to read. Send-Q is every byte the kernel still owes you —
+already written by the shell over there, not yet acknowledged over here.
+Divided by the rate the path is really delivering, it stops being a volume and
+becomes a **time**, and that time is the answer to "why is this terminal
+behaving like that". It is also what makes `upl` interpretable: 300 K/s next to
+`lag 4ms` is a link doing its job, and 300 K/s next to `lag 800ms` is a link
+that has become a queue you are sitting in.
+
+Nothing extra is measured to get any of it. The kernel on the remote side is
+already keeping a full TCP record of the connection carrying the reading;
+`ss -ti` just hands it over. Loss is a **delta across the sample window** rather
+than the socket's lifetime counters, for the usual reason every other rate here
+is: a `ControlMaster` socket lives for minutes, and lifetime loss reports a
+burst from ten minutes ago as though it were happening now.
+
+A `lag` over 300 ms is the **first** thing that can claim the headline, ahead of
+every check about the box itself — `slow: ssh lag 869ms`. That is deliberate,
+and it is the one case where a machine whose own readings are perfectly healthy
+should still read as slow, because that is the truth of trying to use it.
+
+> **Whose socket?** The ssh connection back to this client with the deepest send
+> queue. Under `ControlMaster` the interactive session and the puller are
+> usually the *same* TCP connection; where they aren't, the busiest one is the
+> one whose backlog your next keystroke would queue behind — which is the thing
+> worth measuring. Loss is summed across all of them, since they share a path.
 
 ### The rows that only appear when they matter
 
