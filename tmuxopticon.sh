@@ -46,6 +46,14 @@ TAB=$'\t'       # field separator for ordered_sessions (names may contain spaces
 RANK_UNSET=9999999  # sort key for a session with no manual @tmuxopticon-order —
                     # big enough that unmoved sessions always sit below ranked ones
 
+# Claude's pane-title glyphs, as perl character-class bodies. The spinner set moved
+# across builds — braille (U+2800–U+28FF) on older ones, clock-face circles ◐◑◒◓
+# (U+25D0–U+25D3) since 2.1.x — so both stay listed.
+GLYPH_SPIN='\x{2800}-\x{28ff}\x{25d0}-\x{25d3}'
+GLYPH_CLAUDE="\\x{2733}$GLYPH_SPIN"   # + ✳, which Claude shows when idle/ready
+
+PANE_TAIL=20   # rows of live UI to scrape; above that is scrollback, not state
+
 # colours (SGR): status coloured by state, branch dimmed
 C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
 C_CUR=$'\033[1;7m'   # active session header: bold + reverse (a highlighted chip)
@@ -173,14 +181,23 @@ pane_marker() { # <pane content> -> "<state> [detail] <pretty> t<epoch>", else '
 }
 
 pane_scraped() { # <pane content> -> working|waiting|done|'' from Claude's UI text
-  # Fallback for a Claude with no marker. Last match in the buffer wins — the
-  # lines above it are previous turns. Never key `done` off "auto mode on" or
-  # "shift+tab to cycle": those show whether Claude is grinding or idle.
-  printf '%s' "$1" | awk '
-    /esc to interrupt/ || /tokens\)/ || /Waiting…/    { s="working" }
-    /· done [0-9]+:[0-9][0-9]/                        { s="done" }
-    /Do you want|Would you like|esc to cancel/        { s="waiting" }
-    END { print s }'
+  # Fallback for a Claude with no marker. Last match wins — lines above it are
+  # previous turns. Never key `done` off "auto mode on" or "shift+tab to cycle":
+  # those show whether Claude is grinding or idle.
+  #
+  # Two guards against the pane's own transcript. Only the last $PANE_TAIL rows
+  # are read, and `working` must sit behind a sparkle glyph in column 0 — the
+  # shape Claude renders the counter line in, which prose doesn't take. Without
+  # both, a pane *discussing* these markers matches itself and sticks there.
+  # Perl, not awk: the glyph classes need \x{…}, which awk can't do portably.
+  # Program text stays pure ASCII so it matches -CSD's decoded input.
+  # ✔ "✽ 🔨 Working… (1m 47s · ↓ 5.8k tokens)"   ✔ "· ✦ Cerebrating… (esc to interrupt)"
+  # ✘ "- WORKING_RE — esc to interrupt or \([0-9]+…"   (prose quoting the marker)
+  printf '%s\n' "$1" | tail -n "$PANE_TAIL" | perl -CSD -ne '
+    $s = "working" if /^[\x{00b7}\x{2022}\x{2722}-\x{2727}\x{2731}-\x{273d}] .*(?:\([0-9]+[hms][^)]*tokens|esc to interrupt|Waiting\x{2026})/;
+    $s = "done"    if /\x{00b7}\s+done\s+[0-9]+:[0-9][0-9]/;
+    $s = "waiting" if /Do you want|Would you like|esc to cancel/;
+    END { print $s }'
 }
 
 session_status() { # -> working|waiting|done|""  (worst-case across the session's panes)
@@ -244,14 +261,15 @@ session_pane_rows() { # one "<pane_index>\037<status>\037<label>\037<path>" line
     # survives a custom statusLine, which replaces the "? for shortcuts" hint we
     # used to key idle/done off. (During a tool call the command briefly changes,
     # but then Claude is *working* and the title/footer checks below catch it.)
-    claude=0; case "$cmd" in claude|claude-code) claude=1;; esac
+    # (2.1.x sets its process title to the bare version, so tmux reports `2.1.234`.)
+    claude=0; case "$cmd" in claude|claude-code|[0-9]*.[0-9]*.[0-9]*) claude=1;; esac
     # A Claude pane over SSH reports cmd=ssh, so the command tell fails. But Claude
-    # also stamps the pane *title* with its own glyph — `✳` (U+2733) when idle/ready,
-    # a braille spinner while working — and that propagates through ssh/tmux. Either
+    # also stamps the pane *title* with its own glyph — `✳` when idle/ready, a
+    # spinner while working ($GLYPH_SPIN) — and that propagates through ssh/tmux. Either
     # marker means "this is Claude", so an idle remote session resolves to `done`
     # (via the claude=1 branch below) instead of falling through to `⇄ remote`. A
     # plain remote shell's title is `user@host:path`, with no such glyph.
-    if printf '%s' "$title" | perl -CSD -ne 'exit(/[\x{2733}\x{2800}-\x{28ff}]/?0:1)' 2>/dev/null; then claude=1; fi
+    if printf '%s' "$title" | perl -CSD -ne "exit(/[$GLYPH_CLAUDE]/?0:1)" 2>/dev/null; then claude=1; fi
     content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
     marker="$(pane_marker "$content")"
     # The scrape earns its keep twice over: panes whose Claude has no marker,
@@ -262,9 +280,9 @@ session_pane_rows() { # one "<pane_index>\037<status>\037<label>\037<path>" line
       # A statusline only repaints when Claude repaints. If it stalled mid-turn
       # the pane's own "· done H:MM" line is the fresher truth, so let it win.
       if [ "$stat" = working ] && [ "$scraped" = done ]; then stat=done; marker=''; fi
-    # Older Claude builds animated a braille spinner (U+2800–U+28FF) in the pane
-    # title instead. Kept as a positive tell: the title survives narrow splits.
-    elif printf '%s' "$title" | perl -CSD -ne 'exit(/[\x{2800}-\x{28ff}]/?0:1)' 2>/dev/null; then stat=working
+    # Some builds animate a spinner in the pane title instead. Kept as a positive
+    # tell: the title survives narrow splits where the counter line truncates.
+    elif printf '%s' "$title" | perl -CSD -ne "exit(/[$GLYPH_SPIN]/?0:1)" 2>/dev/null; then stat=working
     elif [ -n "$scraped" ]; then stat="$scraped"
     elif [ "$claude" = 1 ]; then stat=done   # a Claude pane sitting idle: command says claude, no working/waiting cue
     else

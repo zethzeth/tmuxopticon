@@ -136,8 +136,11 @@ not break are summarised in `CLAUDE.md` — this file is the *why* behind them.
 ## Status detection is heuristic and fragile
 
 Whether a pane *is* Claude is decided robustly first, two ways: `pane_current_command
-== claude`, **or** the pane *title* carries Claude's own glyph — `✳` (U+2733) when
-idle/ready, a braille spinner (U+2800–U+28FF) while working. The title tell is what
+== claude`, or a bare version string like `2.1.250` — 2.1.x sets its process title
+to its own version, so that is what tmux reports — **or** the pane *title* carries
+Claude's own glyph — `✳` (U+2733) when idle/ready, a spinner while working
+(`$GLYPH_SPIN`: braille U+2800–U+28FF on older builds, ◐◑◒◓ U+25D0–U+25D3 since
+2.1.x). The title tell is what
 catches a Claude running **over SSH**, where the local command is `ssh` (see the
 caveat below); a plain remote shell's title is `user@host:path`, with no such glyph.
 Both tells are immune to UI changes and to a custom `statusLine` (which replaces the
@@ -147,10 +150,11 @@ shell). The finer split is read two ways, preferring the first. If the pane text
 that wins outright — `pane_marker` pulls it out, and `render` ages the epoch every
 frame so the elapsed keeps ticking even when whatever printed it has stopped
 repainting. Otherwise `pane_scraped` falls back to Claude's UI text: `esc to
-interrupt` or a live token count for `working`, `· done H:MM` for `done`, `do you
-want`/`would you like`/`esc to cancel` for `waiting`, plus a braille-spinner
-(U+2800–U+28FF) check on the pane *title*. Last match in the buffer wins — the
-lines above it are previous turns. A Claude pane matching none of it — idle under
+interrupt` or a duration-then-token count for `working`, `· done H:MM` for `done`,
+`do you want`/`would you like`/`esc to cancel` for `waiting`, plus a spinner check
+on the pane *title*. Both glyph sets live in `$GLYPH_SPIN`/`$GLYPH_CLAUDE` at the
+top of the script — change them there, not at the two call sites. Last match wins —
+the lines above it are previous turns. A Claude pane matching none of it — idle under
 a custom statusLine — falls back to `done` precisely *because* the command is
 `claude`.
 
@@ -163,10 +167,21 @@ marker exists so the next redesign degrades instead of inverting. Both classifie
 go through `pane_marker`/`pane_scraped`, so the patterns live in one place; they
 had drifted into two copies, and the dead one kept the broken version.
 
+**Scrape the live UI, not the transcript.** `pane_scraped` reads only the last
+`$PANE_TAIL` rows, and anchors `working` to a sparkle glyph in column 0 — the shape
+Claude renders the counter line in, which prose doesn't take. Without both, a pane
+*discussing* these markers matches its own conversation and sticks there; the
+session that first repaired this detector scraped as `● working` forever, off the
+prose explaining the pattern. Anything added here inherits the trap: match
+something Claude *renders*, in a shape prose doesn't take. The `waiting` scrape is
+the weakest on that count — ordinary English, caught only by the `$PANE_TAIL`
+window. `pane_scraped` is perl, not awk, because the glyph classes need `\x{…}`;
+its program text stays pure ASCII so it matches `-CSD`'s decoded input.
+
 Caveat: a Claude session running **over SSH** reports `pane_current_command == ssh`
 locally, so the command tell fails for those. Presence then rests on the title glyph
 (`✳`/spinner, above): an *idle* remote Claude is titled `✳ …`, so it resolves to
-`○ done` like a local one; a *working* one carries the braille spinner → `● working`;
+`○ done` like a local one; a *working* one carries the spinner glyph → `● working`;
 and a *waiting* one is caught by the text scrape of the prompt footers (`esc to
 cancel`, `do you want`) → `◐ waiting`. Only a remote pane *not* running Claude (a
 plain shell, title `user@host:path`) stays `⇄ remote`. The fragile spot is a remote

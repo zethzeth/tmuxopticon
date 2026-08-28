@@ -206,12 +206,19 @@ run on the far box and the state rides home in the pixels, which a
 With no marker, each pane is classified by what Claude Code is showing. The
 **last** matching line in the pane wins, since earlier ones are previous turns:
 
-- **working** — the footer reads `esc to interrupt`, or the spinner line carries
-  a live token count (`… ↓ 3.0k tokens)`), or a tool is showing `Waiting…`. A
-  braille spinner (`U+2800`–`U+28FF`) animating in the pane *title* also counts.
+- **working** — the counter line reads `esc to interrupt`, carries a live
+  duration-then-token count (`(1m 47s · ↓ 5.8k tokens)`), or shows `Waiting…`.
+  A spinner animating in the pane *title* also counts (`◐◑◒◓` on Claude 2.1.x,
+  braille `U+2800`–`U+28FF` on older builds).
 - **waiting** — the pane is asking a question (`do you want…`, `would you
   like…`, or any selection prompt showing `esc to cancel`).
 - **done** — the spinner line has settled into `· done H:MM`.
+
+Only the **bottom `PANE_TAIL` rows** are scraped, and the `working` line must
+carry its sparkle glyph in column 0. Both guards exist for one reason: a pane
+whose *conversation* quotes these markers — you asked Claude about tmuxopticon,
+or grepped for `esc to interrupt` — otherwise pins itself to that state. State
+lives in the live UI at the bottom of the pane, never in the scrollback above it.
 
 This half is UI-text sniffing and it *will* drift as Claude's interface changes —
 that is exactly why the marker exists. Note what is deliberately **not** keyed
@@ -220,7 +227,8 @@ Claude is grinding or idle, so treating them as "done" makes every session read
 done forever.
 
 Whether a pane is Claude at all is decided first by its foreground process
-(`pane_current_command` is `claude`) and, failing that, by the glyph Claude stamps
+(`pane_current_command` is `claude` — or a bare version like `2.1.234`, which is
+what 2.1.x sets its process title to) and, failing that, by the glyph Claude stamps
 on the pane **title** (`✳`). Both are robust — they survive a custom `statusLine`,
 and the title glyph also catches a Claude running **over SSH**, where the local
 command is just `ssh`. A Claude pane that matches no state cue at all is shown as
