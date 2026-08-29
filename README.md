@@ -195,11 +195,10 @@ whatever printed the marker has stopped repainting.
 ```
 
 The natural place to print it is a Claude Code **`statusLine`** command, fed by
-`Stop` / `UserPromptSubmit` / `PreToolUse` hooks. Put it **leftmost** on the
-line so a narrow split truncates something else. Because the marker lives in the
-pane's *text* rather than in a tmux option, it also survives **SSH** — the hooks
-run on the far box and the state rides home in the pixels, which a
-`set-option -p` on the remote tmux could never do.
+`Stop` / `UserPromptSubmit` / `PreToolUse` hooks. Codex can instead put the same
+marker in the **terminal title** from lifecycle hooks. Both channels survive
+**SSH** because their escape sequences travel through the terminal; a tmux pane
+option set on the remote host cannot.
 
 ### Reading the screen (fallback)
 

@@ -201,11 +201,13 @@ pane_scraped() { # <pane content> -> working|waiting|done|'' from Claude's UI te
 }
 
 session_status() { # -> working|waiting|done|""  (worst-case across the session's panes)
-  local sess="$1" worst='' pane content st
+  local sess="$1" worst='' pane content title st
   while IFS= read -r pane; do
     [ -n "$pane" ] || continue
     content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
-    st="$(pane_marker "$content")"; st="${st%% *}"
+    title="$(tmux display-message -p -t "$pane" '#{pane_title}' 2>/dev/null)"
+    st="$(pane_marker "$content
+$title")"; st="${st%% *}"
     [ -n "$st" ] || st="$(pane_scraped "$content")"
     case "$st" in
       working)                printf 'working'; return;;
@@ -262,7 +264,7 @@ session_pane_rows() { # one "<pane_index>\037<status>\037<label>\037<path>" line
     # used to key idle/done off. (During a tool call the command briefly changes,
     # but then Claude is *working* and the title/footer checks below catch it.)
     # (2.1.x sets its process title to the bare version, so tmux reports `2.1.234`.)
-    claude=0; case "$cmd" in claude|claude-code|[0-9]*.[0-9]*.[0-9]*) claude=1;; esac
+    claude=0; case "$cmd" in claude|claude-code|codex|[0-9]*.[0-9]*.[0-9]*) claude=1;; esac
     # A Claude pane over SSH reports cmd=ssh, so the command tell fails. But Claude
     # also stamps the pane *title* with its own glyph — `✳` when idle/ready, a
     # spinner while working ($GLYPH_SPIN) — and that propagates through ssh/tmux. Either
@@ -271,7 +273,8 @@ session_pane_rows() { # one "<pane_index>\037<status>\037<label>\037<path>" line
     # plain remote shell's title is `user@host:path`, with no such glyph.
     if printf '%s' "$title" | perl -CSD -ne "exit(/[$GLYPH_CLAUDE]/?0:1)" 2>/dev/null; then claude=1; fi
     content="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
-    marker="$(pane_marker "$content")"
+    marker="$(pane_marker "$content
+$title")"
     # The scrape earns its keep twice over: panes whose Claude has no marker,
     # and overruling a marker that froze (see below).
     scraped="$(pane_scraped "$content")"
@@ -893,8 +896,8 @@ help() { # print the key bindings (querying tmux for the live prefix key)
   disp="${p/C-/Ctrl+}"; disp="${disp/M-/Alt+}"   # C-Space -> Ctrl+Space
   cat <<EOF
 ${C_BOLD}tmuxopticon${C_RESET} — a live left sidebar watching every tmux session.
-claude per split:  ${C_WORK}● working${C_RESET}   ${C_WAIT}◐ waiting${C_RESET}   ${C_DONE}○ done${C_RESET}
-                   a Claude whose statusline emits a ⟨state detail epoch⟩ marker
+agent per split:   ${C_WORK}● working${C_RESET}   ${C_WAIT}◐ waiting${C_RESET}   ${C_DONE}○ done${C_RESET}
+                   Claude/Codex emitting a ⟨state detail epoch⟩ marker
                    shows the live detail instead: ${C_WORK}● Bash 72s${C_RESET}, ${C_DONE}○ done 12m${C_RESET}
 plain  per split:  ${C_NVIM}N nvim${C_RESET}   ${C_REMOTE}⇄ remote${C_RESET}   ${C_DIM}\$ shell${C_RESET}
 

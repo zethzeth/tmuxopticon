@@ -1,7 +1,7 @@
 # tmuxopticon
 
 A toggleable left tmux sidebar that watches every session at once: split
-counts + live Claude Code status (working / waiting / done). User-facing docs
+counts + live Claude Code/Codex status (working / waiting / done). User-facing docs
 are in `README.md`; this file is the dev cheat-sheet — **the rules that will
 bite you.** The reference material lives in `docs/`:
 
