@@ -30,7 +30,7 @@
 # reads the matching tmp/<id>.cache files. See providers/ and CLAUDE.md.
 #
 # tmux options (set with `set -g <option> <value>`):
-#   @tmuxopticon-width          sidebar width in columns    (default 26)
+#   @tmuxopticon-width          sidebar width in columns    (default 42)
 #   @tmuxopticon-interval       redraw interval in seconds  (default 2)
 #   @tmuxopticon-provider-stale seconds before a provider cache is flagged stale
 #                               (default 180)
@@ -540,7 +540,7 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
 render_frame() { # build + paint one frame (called from render, inside a subshell)
   local w h tw EOL=$'\033[K\n'
   w="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)"
-  [ -n "$w" ] || w="$(opt @tmuxopticon-width 26)"
+  [ -n "$w" ] || w="$(opt @tmuxopticon-width 42)"
   h="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_height}' 2>/dev/null)"
   case "$h" in ''|*[!0-9]*) h=40;; esac
   tw=$(( w - 1 )); [ "$tw" -lt 1 ] && tw=1           # usable text width (no indent)
@@ -724,7 +724,7 @@ in_current_window() { # -> sidebar pane id in the current window, if any
 }
 
 open_here() { # open the sidebar in the current window, keep focus on the work pane
-  local width; width="$(opt @tmuxopticon-width 26)"
+  local width; width="$(opt @tmuxopticon-width 42)"
   # -f spans the full window height (not just the active pane), so the sidebar
   # is a true left column that sits beside any existing splits instead of
   # carving one of them in half. -b puts it on the left, -h is a side split.
@@ -747,7 +747,7 @@ warm_everywhere() { # open the sidebar in every session's active window, focus u
   # handles those on arrival, as it always has).
   sidebar_active || return 0
   local width sess have zoomed prev new
-  width="$(opt @tmuxopticon-width 26)"
+  width="$(opt @tmuxopticon-width 42)"
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
     zoomed="$(tmux display-message -p -t "=$sess:" '#{window_zoomed_flag}' 2>/dev/null)"
@@ -771,7 +771,7 @@ reset_width() { # warm every session, then snap every sidebar to @tmuxopticon-wi
   # proportionally, so the sidebar drifts from its configured width. The render
   # loop re-reads pane_width every tick, so resizing alone is a full refresh.
   warm_everywhere
-  local width; width="$(opt @tmuxopticon-width 26)"
+  local width; width="$(opt @tmuxopticon-width 42)"
   tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
     | awk -v t="$SIDEBAR_TITLE" '$2 == t { print $1 }' \
     | while IFS= read -r p; do tmux resize-pane -t "$p" -x "$width" 2>/dev/null || true; done
@@ -986,7 +986,7 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
     Icons:  ${C_DONE}○ ok${C_RESET}   • info   ${C_DOWN}● needs attention${C_RESET}   ${C_ALERT} ⚠ ERROR ${C_RESET}   ${C_WAIT}Last sync: …${C_RESET} (cron stopped)
 
   ${C_BOLD}Config${C_RESET}  (set -g in your .tmux.conf)
-    @tmuxopticon-width           sidebar width in columns       (default 34)
+    @tmuxopticon-width           sidebar width in columns       (default 42)
     @tmuxopticon-interval        redraw interval in seconds      (default 2)
     @tmuxopticon-provider-stale  secs before a cache is "stale"  (default 180)
     @tmuxopticon-host-aliases    from=to;… aliases for SSH-path hostnames

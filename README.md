@@ -144,7 +144,7 @@ select-pane -U`, `bind j select-pane -D`, …) or set
 Set these in your `~/.tmux.conf` (defaults shown):
 
 ```tmux
-set -g @tmuxopticon-width           34    # sidebar width in columns
+set -g @tmuxopticon-width           42    # sidebar width in columns
 set -g @tmuxopticon-interval        2     # redraw interval in seconds
 set -g @tmuxopticon-provider-stale  180   # secs before a status cache reads "stale"
 

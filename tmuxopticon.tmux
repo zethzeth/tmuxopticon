@@ -18,7 +18,7 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
 SCRIPT="$CURRENT_DIR/tmuxopticon.sh"
 
 # --- defaults (override these in your own .tmux.conf if you like) -----
-tmux set -gq @tmuxopticon-width    '34'
+tmux set -gq @tmuxopticon-width    '42'
 # 2s, not 1s. The redraw loop runs once per tmux SESSION, and a frame costs
 # real work (a capture-pane and a status scrape per pane), so the cost of this
 # number is multiplied by however many sessions are open. At 1s on a busy box
