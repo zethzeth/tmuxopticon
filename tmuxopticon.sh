@@ -32,6 +32,7 @@
 # tmux options (set with `set -g <option> <value>`):
 #   @tmuxopticon-width          sidebar width in columns    (default 42)
 #   @tmuxopticon-code-dirs      ';'-separated dirs whose children are projects (default ~/code)
+#   @tmuxopticon-project-colors ';'-separated name=bg or name=fg:bg badges for the header
 #   @tmuxopticon-interval       redraw interval in seconds  (default 2)
 #   @tmuxopticon-provider-stale seconds before a provider cache is flagged stale
 #                               (default 180)
@@ -137,6 +138,50 @@ apply_host_aliases() { # rewrite ugly hostnames in a path via @tmuxopticon-host-
   done
   IFS="$oldifs"
   printf '%s' "$p"
+}
+
+color_code() { # <name|0-255> -> 256-colour index, '' if unknown
+  case "$1" in
+    black) printf 0;;   red) printf 1;;     green) printf 2;;  yellow) printf 3;;
+    blue) printf 4;;    magenta) printf 5;; cyan) printf 6;;   white) printf 15;;
+    gray|grey) printf 8;; purple) printf 93;; pink) printf 205;; orange) printf 208;;
+    [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) [ "$1" -le 255 ] && printf '%s' "$1";;
+  esac
+}
+
+project_color() { # <project> -> SGR prefix from @tmuxopticon-project-colors, '' if unlisted
+  # ';'-separated name=bg or name=fg:bg pairs; a colour is one of the names in
+  # color_code or a 0-255 index. Text defaults to black on the light backgrounds
+  # and white on the rest. Keeps personal project names out of the engine:
+  #   set -g @tmuxopticon-project-colors 'app=white:blue;tools=orange;api=purple'
+  local spec pair name val fg bg oldifs
+  spec="$(opt @tmuxopticon-project-colors '')"
+  [ -n "$spec" ] || return 0
+  oldifs="$IFS"; IFS=';'
+  for pair in $spec; do
+    IFS="$oldifs"
+    name="${pair%%=*}"; val="${pair#*=}"
+    if [ "$name" = "$1" ] && [ -n "$val" ]; then
+      case "$val" in *:*) fg="${val%%:*}"; bg="${val#*:}";; *) fg=''; bg="$val";; esac
+      bg="$(color_code "$bg")"; [ -n "$bg" ] || return 0
+      if [ -n "$fg" ]; then fg="$(color_code "$fg")"
+      else case "$bg" in 3|6|7|11|14|15|205|208) fg=0;; *) fg=15;; esac; fi
+      printf '\033[38;5;%s;48;5;%sm' "${fg:-15}" "$bg"; return
+    fi
+    IFS=';'
+  done
+  IFS="$oldifs"
+}
+
+paint_header() { # <text> <project> <colour> <base style> -> text with the project badged
+  # Only the project token wears the badge; " / dir (host)" keeps the row's own
+  # style, which <base> re-applies after the badge's reset. A row truncated
+  # inside the token badges what is left of it.
+  local text="$1" tok="$2" col="$3" base="$4"
+  if [ -z "$col" ]; then printf '%s' "$text"
+  elif [ -n "$tok" ] && [ "${text#"$tok"}" != "$text" ]; then printf '%s%s%s%s%s' "$col" "$tok" "$C_RESET" "$base" "${text#"$tok"}"
+  else printf '%s%s%s%s' "$col" "$text" "$C_RESET" "$base"
+  fi
 }
 
 ordered_sessions() { # canonical order, shared by render / jump / click / move
@@ -611,7 +656,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
 
   # --- build the frame + a row->session map, then paint once (no flicker) ---
   # \033[K clears each line to its end; \033[J clears any leftover rows below.
-  local out='' rows='' cur s idx=0 mark jump name dir prows nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
+  local out='' rows='' cur s idx=0 mark jump name dir ptok pcol prows nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
   cur="$(current_session)"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
@@ -632,12 +677,15 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
     # truncate to the room *left of* the "▶[N]  " prefix (7 cols on the active
     # row — mark+jump+chip space+2 gaps — 6 on the rest), so a long dir name
     # never overflows the sidebar width and wraps onto the next row.
+    # A project listed in @tmuxopticon-project-colors wears a coloured badge, so
+    # the sessions you live in are spotted before the text is read.
+    ptok="${dir%% / *}"; ptok="${ptok%% (*}"; pcol="$(project_color "$ptok")"
     if [ "$s" = "$cur" ]; then                          # make the active session pop
       nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${dir:0:nb}${C_RESET}"
+      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}$(paint_header "${dir:0:nb}" "$ptok" "$pcol" "$C_BOLD")${C_RESET}"
     else
       nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${mark}${jump}  ${dir:0:nb}"
+      hdr="${mark}${jump}  $(paint_header "${dir:0:nb}" "$ptok" "$pcol" '')${C_RESET}"
     fi
     out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  dir
     if [ -n "$name" ]; then
@@ -1022,6 +1070,7 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
     @tmuxopticon-interval        redraw interval in seconds      (default 2)
     @tmuxopticon-provider-stale  secs before a cache is "stale"  (default 180)
     @tmuxopticon-host-aliases    from=to;… aliases for SSH-path hostnames
+    @tmuxopticon-project-colors  name=bg;name=fg:bg;… header badges per project
     @tmuxopticon-default-keys    set 'off' to bind the keys yourself
 EOF
 }
