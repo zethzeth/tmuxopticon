@@ -82,11 +82,16 @@ not break are summarised in `CLAUDE.md` — this file is the *why* behind them.
 - **The header is the directory, the title is the row under it.** `render_frame`
   gathers `session_pane_rows` into a string *before* painting the header, since
   `session_dir` needs the lead pane's path (first `local`/`remote` row, else the
-  first row) to print `dir` / `dir (host)`; the same string then feeds the
+  first row) to print `proj` / `proj / dir` / `… (host)`; the same string then feeds the
   per-pane loop, so the capture-pane cost is paid once. The title row is
   skipped when `session_label` is blank, and a session with no pane path falls
   back to the title (or raw name) in the header. `pane_path` strips `user@`
-  from an SSH prefix so the cell and the header both read `host:…`.
+  from an SSH prefix so the cell and the header both read `host:…`. The
+  project comes from `project_root`: `git rev-parse --show-toplevel` for a
+  local path (one fast local call per session per frame — a submodule answers
+  as itself), and for a remote path — render never touches ssh — the first
+  component under one of `@tmuxopticon-code-dirs`. At the root only the
+  project name shows; below it, `proj / <basename>` regardless of depth.
 - **Per-session notes are tmux options too**: `prefix m` prompts (prefilled via
   `command-prompt -I '#{@tmuxopticon-note}'`) and stores the text as a
   *session-scoped* user option `@tmuxopticon-note`; `render` draws it as a `✎`

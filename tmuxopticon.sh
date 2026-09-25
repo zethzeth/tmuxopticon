@@ -31,6 +31,7 @@
 #
 # tmux options (set with `set -g <option> <value>`):
 #   @tmuxopticon-width          sidebar width in columns    (default 42)
+#   @tmuxopticon-code-dirs      ';'-separated dirs whose children are projects (default ~/code)
 #   @tmuxopticon-interval       redraw interval in seconds  (default 2)
 #   @tmuxopticon-provider-stale seconds before a provider cache is flagged stale
 #                               (default 180)
@@ -235,11 +236,37 @@ pane_path() { # <pane_id> -> the pane's path for display
   printf '%s%s' "$host" "$rest"
 }
 
-session_dir() { # <pane rows> -> "dir" / "dir (host)" for the session's lead pane
-  # The header names the *place* a session lives, not its title: the basename
-  # of the first plain shell's path (falling back to the first pane of any
-  # kind), with the SSH host in parens. "~/code/dotfiles" -> "dotfiles",
-  # "api1:~/code/app" -> "app (api1)", "api1:~" -> "~ (api1)".
+project_root() { # <~-path> <host> -> the project root the path sits in (~-form), or nothing
+  # A local path asks git (a submodule answers as itself). A remote path can't —
+  # render never touches ssh — so both fall back to @tmuxopticon-code-dirs: a
+  # ';'-separated list of dirs whose direct children are projects (default
+  # "~/code"), so "~/code/app/src/x" -> "~/code/app".
+  local p="$1" host="$2" abs root spec d rest oldifs
+  if [ -z "$host" ]; then
+    abs="$p"; case "$p" in '~') abs="$HOME";; '~'/*) abs="$HOME${p#'~'}";; esac
+    if root="$(git -C "$abs" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$root" ]; then
+      case "$root" in "$HOME"/*) root="~${root#"$HOME"}";; "$HOME") root='~';; esac
+      printf '%s' "$root"; return
+    fi
+  fi
+  spec="$(opt @tmuxopticon-code-dirs '~/code')"
+  oldifs="$IFS"; IFS=';'
+  for d in $spec; do
+    IFS="$oldifs"
+    d="${d%/}"; case "$d" in "$HOME"/*) d="~${d#"$HOME"}";; esac
+    case "$p" in "$d"/?*) rest="${p#"$d"/}"; printf '%s/%s' "$d" "${rest%%/*}"; return;; esac
+    IFS=';'
+  done
+  IFS="$oldifs"
+}
+
+session_dir() { # <pane rows> -> "dir" / "proj / dir" / "… (host)" for the session's lead pane
+  # The header names the *place* a session lives, not its title: the first
+  # plain shell's path (falling back to the first pane of any kind), reduced to
+  # its project and, when the shell sits below the project root, the current
+  # dir's basename — with the SSH host in parens. "~/code/app" -> "app",
+  # "~/code/app/src/x" -> "app / x", "api1:~/code/app" -> "app (api1)",
+  # "api1:~" -> "~ (api1)", "/" -> "/".
   local rows="$1" pidx stat lbl ppath first='' pick=''
   while IFS=$'\037' read -r pidx stat lbl ppath; do
     [ -n "$ppath" ] || continue
@@ -248,10 +275,15 @@ session_dir() { # <pane rows> -> "dir" / "dir (host)" for the session's lead pan
   done <<< "$rows"
   [ -n "$pick" ] || pick="$first"
   [ -n "$pick" ] || return 0
-  local host='' rest="$pick" dir
+  local host='' rest="$pick" dir root label
   case "$pick" in *:*) host="${pick%%:*}"; rest="${pick#*:}";; esac
   dir="${rest##*/}"; [ -n "$dir" ] || dir="$rest"   # "/" and "…/" keep the full path
-  if [ -n "$host" ]; then printf '%s (%s)' "$dir" "$host"; else printf '%s' "$dir"; fi
+  root="$(project_root "$rest" "$host")"
+  if   [ -z "$root" ];        then label="$dir"
+  elif [ "$root" = "$rest" ]; then label="${root##*/}"
+  else                             label="${root##*/} / $dir"
+  fi
+  if [ -n "$host" ]; then printf '%s (%s)' "$label" "$host"; else printf '%s' "$label"; fi
 }
 
 fmt_age() { # seconds -> 45s / 12m / 2h5m — short enough for the sidebar cell

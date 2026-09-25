@@ -13,7 +13,7 @@ have finished. tmuxopticon gives you one always-current panel — a little
 you can glance left and jump straight to whichever session needs you.
 
 ```
-▶[1]  app               ← active session: where it lives (its first shell's dir)
+▶[1]  app / src         ← active session: its first shell's project / dir
 refactor-auth           the session's title (Claude's, or your rename)
  ✎ Next step: write tests   your note for this session (prefix m)
 ● working ~/code/app    one line per split: state + path
@@ -42,12 +42,15 @@ $ shell   ~/scratch
   one of them in half. It **follows the focused window/session** while toggled
   on — tmux hooks re-home it whenever you switch windows, open a new one, or
   jump between sessions, so it's always on the left wherever you land.
-- **Each session is headed by its directory.** The header row shows the
-  basename of the first plain shell's path (`dotfiles`, or `app (api1)` over
-  SSH) and the session's title sits on the row under it — in a shell-left /
-  Claude-right layout the directory is what tells sessions apart at a glance,
-  and the title is Claude's ever-changing summary. An SSH path's `user@` is
-  dropped everywhere (`api1:~/app`, not `me@api1:~/app`).
+- **Each session is headed by its project.** The header row names where the
+  first plain shell sits: the project (`dotfiles`), plus the current dir when
+  the shell is below the project root (`dotfiles / tmux`, whatever the depth),
+  plus the host over SSH (`app / http (api1)`). The session's title sits on the
+  row under it — in a shell-left / Claude-right layout the place is what tells
+  sessions apart at a glance, and the title is Claude's ever-changing summary.
+  A local shell's project is its git root; a remote one can't ask git, so the
+  path is matched against `@tmuxopticon-code-dirs` (default `~/code`) instead.
+  An SSH path's `user@` is dropped everywhere (`api1:~/app`, not `me@api1:~/app`).
 - **Live Claude Code status per split.** Each non-sidebar pane is probed and
   labelled `working` / `waiting` / `done` (see *How status is detected*). Panes
   not running Claude get a type icon instead: `N nvim`, `⇄ remote` (an SSH
@@ -148,6 +151,9 @@ set -g @tmuxopticon-width           42    # sidebar width in columns
 set -g @tmuxopticon-interval        2     # redraw interval in seconds
 set -g @tmuxopticon-provider-stale  180   # secs before a status cache reads "stale"
 
+# dirs whose direct children are projects (';'-separated) — how a remote
+# shell's header finds its project without asking git over ssh
+set -g @tmuxopticon-code-dirs       '~/code;~/work'
 # friendly aliases for ugly hostnames in SSH-pane paths (';'-separated from=to)
 set -g @tmuxopticon-host-aliases    'ip-10-13-99-46=api1;10.0.0.5=db'
 # set this BEFORE the run-shell line to bind the keys yourself instead of the defaults
