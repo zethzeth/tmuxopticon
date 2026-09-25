@@ -13,12 +13,14 @@ have finished. tmuxopticon gives you one always-current panel — a little
 you can glance left and jump straight to whichever session needs you.
 
 ```
-▶[1]  refactor-auth     ← active session (highlighted)
+▶[1]  app               ← active session: where it lives (its first shell's dir)
+refactor-auth           the session's title (Claude's, or your rename)
  ✎ Next step: write tests   your note for this session (prefix m)
 ● working ~/code/app    one line per split: state + path
 ◐ waiting ~/code/api
 ──────────────────────
- [2]  notes             a renamed session
+ [2]  api (api1)        an SSH session names the host too
+notes
  ✎ BLOCKED: needs local setup   BLOCK… notes go bold red
 ○ done ~/code/dotfiles
 N nvim    ~/code/conf    plain panes get an icon too:
@@ -40,6 +42,12 @@ $ shell   ~/scratch
   one of them in half. It **follows the focused window/session** while toggled
   on — tmux hooks re-home it whenever you switch windows, open a new one, or
   jump between sessions, so it's always on the left wherever you land.
+- **Each session is headed by its directory.** The header row shows the
+  basename of the first plain shell's path (`dotfiles`, or `app (api1)` over
+  SSH) and the session's title sits on the row under it — in a shell-left /
+  Claude-right layout the directory is what tells sessions apart at a glance,
+  and the title is Claude's ever-changing summary. An SSH path's `user@` is
+  dropped everywhere (`api1:~/app`, not `me@api1:~/app`).
 - **Live Claude Code status per split.** Each non-sidebar pane is probed and
   labelled `working` / `waiting` / `done` (see *How status is detected*). Panes
   not running Claude get a type icon instead: `N nvim`, `⇄ remote` (an SSH

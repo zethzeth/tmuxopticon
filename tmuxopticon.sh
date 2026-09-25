@@ -230,8 +230,28 @@ pane_path() { # <pane_id> -> the pane's path for display
   # Collapse $HOME -> ~ . Peel off any "host:" prefix first so SSH paths collapse
   # too. The ~ stays inside double quotes so bash doesn't tilde-expand it back.
   case "$p" in *:*) host="${p%%:*}:"; rest="${p#*:}";; *) host=''; rest="$p";; esac
+  host="${host#*@}"   # "user@host:" -> "host:" — the user is noise in a 26-col cell
   case "$rest" in "$HOME"/*) rest="~${rest#"$HOME"}";; "$HOME") rest='~';; esac
   printf '%s%s' "$host" "$rest"
+}
+
+session_dir() { # <pane rows> -> "dir" / "dir (host)" for the session's lead pane
+  # The header names the *place* a session lives, not its title: the basename
+  # of the first plain shell's path (falling back to the first pane of any
+  # kind), with the SSH host in parens. "~/code/dotfiles" -> "dotfiles",
+  # "api1:~/code/app" -> "app (api1)", "api1:~" -> "~ (api1)".
+  local rows="$1" pidx stat lbl ppath first='' pick=''
+  while IFS=$'\037' read -r pidx stat lbl ppath; do
+    [ -n "$ppath" ] || continue
+    [ -n "$first" ] || first="$ppath"
+    case "$stat" in local|remote) pick="$ppath"; break;; esac
+  done <<< "$rows"
+  [ -n "$pick" ] || pick="$first"
+  [ -n "$pick" ] || return 0
+  local host='' rest="$pick" dir
+  case "$pick" in *:*) host="${pick%%:*}"; rest="${pick#*:}";; esac
+  dir="${rest##*/}"; [ -n "$dir" ] || dir="$rest"   # "/" and "…/" keep the full path
+  if [ -n "$host" ]; then printf '%s (%s)' "$dir" "$host"; else printf '%s' "$dir"; fi
 }
 
 fmt_age() { # seconds -> 45s / 12m / 2h5m — short enough for the sidebar cell
@@ -559,7 +579,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
 
   # --- build the frame + a row->session map, then paint once (no flicker) ---
   # \033[K clears each line to its end; \033[J clears any leftover rows below.
-  local out='' rows='' cur s idx=0 mark jump name nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
+  local out='' rows='' cur s idx=0 mark jump name dir prows nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
   cur="$(current_session)"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
@@ -567,18 +587,31 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
     idx=$((idx + 1))
     mark=' '; [ "$s" = "$cur" ] && mark='▶'
     if [ "$idx" -le 9 ]; then jump="[$idx]"; else jump='[ ]'; fi
-    name="$(session_label "$s")"; [ -n "$name" ] || name="$s"   # friendly name, else raw session
-    # truncate the name to the room *left of* the "▶[N]  " prefix (7 cols on
-    # the active row — mark+jump+chip space+2 gaps — 6 on the rest), so a long
-    # title never overflows the sidebar width and wraps onto the next row.
+    # Pane rows are gathered up front (one capture-pane per pane — the frame's
+    # expensive step) because the header needs the lead pane's directory before
+    # any row is painted; the same string feeds the per-pane loop below.
+    prows="$(session_pane_rows "$s")"
+    name="$(session_label "$s")"                        # the Claude title / your rename
+    dir="$(session_dir "$prows")"
+    # Header: "▶[N]  dir" — where the session lives — then the title on its own
+    # row underneath. A session with no pane path (or no title) collapses to
+    # whichever of the two it has, else the raw session name.
+    [ -n "$dir" ] || { dir="${name:-$s}"; name=''; }
+    # truncate to the room *left of* the "▶[N]  " prefix (7 cols on the active
+    # row — mark+jump+chip space+2 gaps — 6 on the rest), so a long dir name
+    # never overflows the sidebar width and wraps onto the next row.
     if [ "$s" = "$cur" ]; then                          # make the active session pop
       nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${name:0:nb}${C_RESET}"
+      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${dir:0:nb}${C_RESET}"
     else
       nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${mark}${jump}  ${name:0:nb}"
+      hdr="${mark}${jump}  ${dir:0:nb}"
     fi
-    out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  name
+    out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  dir
+    if [ -n "$name" ]; then
+      [ "$prow" -ge "$avail" ] && break                 # no room left before the box
+      out+="${name:0:tw}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))   # title row
+    fi
     # The session's note ("Next step: …"), right under its name — your own
     # jotting about where this session is at, so you don't have to read the
     # Claude wall of text to re-orient. "BLOCK…" notes turn bold red. Notes
@@ -634,7 +667,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
         line="${C_DIM}${numpfx}${ppath:0:budget}${C_RESET}"
       fi
       out+="${line}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))
-    done < <(session_pane_rows "$s")
+    done <<< "$prows"
     [ "$prow" -ge "$avail" ] && break               # skip the divider if we're out of room
     out+="${C_DIM}${div}${C_RESET}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))  # divider between sessions
   done < <(ordered_sessions)

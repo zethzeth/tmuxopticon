@@ -79,6 +79,14 @@ not break are summarised in `CLAUDE.md` — this file is the *why* behind them.
 - **State lives in tmux options**, not files: `@tmuxopticon-active` (0/1) is the
   global on/off; `-width` / `-interval` are config. Options are read live each
   frame, so config changes apply without a reload.
+- **The header is the directory, the title is the row under it.** `render_frame`
+  gathers `session_pane_rows` into a string *before* painting the header, since
+  `session_dir` needs the lead pane's path (first `local`/`remote` row, else the
+  first row) to print `dir` / `dir (host)`; the same string then feeds the
+  per-pane loop, so the capture-pane cost is paid once. The title row is
+  skipped when `session_label` is blank, and a session with no pane path falls
+  back to the title (or raw name) in the header. `pane_path` strips `user@`
+  from an SSH prefix so the cell and the header both read `host:…`.
 - **Per-session notes are tmux options too**: `prefix m` prompts (prefilled via
   `command-prompt -I '#{@tmuxopticon-note}'`) and stores the text as a
   *session-scoped* user option `@tmuxopticon-note`; `render` draws it as a `✎`
