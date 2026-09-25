@@ -51,8 +51,9 @@ $ shell   ~/scratch
   A local shell's project is its git root; a remote one can't ask git, so the
   path is matched against `@tmuxopticon-code-dirs` (default `~/code`) instead.
   An SSH path's `user@` is dropped everywhere (`api1:~/app`, not `me@api1:~/app`).
-  Projects you name in `@tmuxopticon-project-colors` wear a coloured badge in
-  the header, so the handful you live in are spotted before the text is read.
+  A header that starts with a project named in `@tmuxopticon-project-colors`
+  is painted in that colour, so the handful you live in are spotted before the
+  text is read.
 - **Live Claude Code status per split.** Each non-sidebar pane is probed and
   labelled `working` / `waiting` / `done` (see *How status is detected*). Panes
   not running Claude get a type icon instead: `N nvim`, `⇄ remote` (an SSH
@@ -149,16 +150,16 @@ select-pane -U`, `bind j select-pane -D`, …) or set
 Set these in your `~/.tmux.conf` (defaults shown):
 
 ```tmux
-set -g @tmuxopticon-width           42    # sidebar width in columns
+set -g @tmuxopticon-width           52    # sidebar width in columns
 set -g @tmuxopticon-interval        2     # redraw interval in seconds
 set -g @tmuxopticon-provider-stale  180   # secs before a status cache reads "stale"
 
 # dirs whose direct children are projects (';'-separated) — how a remote
 # shell's header finds its project without asking git over ssh
 set -g @tmuxopticon-code-dirs       '~/code;~/work'
-# badge the header of the projects you live in: name=bg or name=fg:bg, colours
-# by name (black red green yellow blue magenta cyan white gray purple pink
-# orange) or 0-255. Unlisted projects stay plain.
+# colour the header row of the projects you live in: name=bg or name=fg:bg,
+# applied when the header *starts with* name. Colours by name (black red green
+# yellow blue magenta cyan white gray purple pink orange) or 0-255.
 set -g @tmuxopticon-project-colors  'app=white:blue;tools=orange;api=purple'
 # friendly aliases for ugly hostnames in SSH-pane paths (';'-separated from=to)
 set -g @tmuxopticon-host-aliases    'ip-10-13-99-46=api1;10.0.0.5=db'

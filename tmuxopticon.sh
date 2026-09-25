@@ -30,9 +30,9 @@
 # reads the matching tmp/<id>.cache files. See providers/ and CLAUDE.md.
 #
 # tmux options (set with `set -g <option> <value>`):
-#   @tmuxopticon-width          sidebar width in columns    (default 42)
+#   @tmuxopticon-width          sidebar width in columns    (default 52)
 #   @tmuxopticon-code-dirs      ';'-separated dirs whose children are projects (default ~/code)
-#   @tmuxopticon-project-colors ';'-separated name=bg or name=fg:bg badges for the header
+#   @tmuxopticon-project-colors ';'-separated name=bg or name=fg:bg; colours a header starting with name
 #   @tmuxopticon-interval       redraw interval in seconds  (default 2)
 #   @tmuxopticon-provider-stale seconds before a provider cache is flagged stale
 #                               (default 180)
@@ -149,10 +149,12 @@ color_code() { # <name|0-255> -> 256-colour index, '' if unknown
   esac
 }
 
-project_color() { # <project> -> SGR prefix from @tmuxopticon-project-colors, '' if unlisted
-  # ';'-separated name=bg or name=fg:bg pairs; a colour is one of the names in
-  # color_code or a 0-255 index. Text defaults to black on the light backgrounds
-  # and white on the rest. Keeps personal project names out of the engine:
+project_color() { # <header text> -> SGR prefix from @tmuxopticon-project-colors, '' if unlisted
+  # ';'-separated name=bg or name=fg:bg pairs, first pair whose name the header
+  # *starts with* wins — "app / src (api1)" matches "app". A colour is one of
+  # the names in color_code or a 0-255 index. Text defaults to black on the
+  # light backgrounds and white on the rest. Keeps personal project names out
+  # of the engine:
   #   set -g @tmuxopticon-project-colors 'app=white:blue;tools=orange;api=purple'
   local spec pair name val fg bg oldifs
   spec="$(opt @tmuxopticon-project-colors '')"
@@ -161,7 +163,7 @@ project_color() { # <project> -> SGR prefix from @tmuxopticon-project-colors, ''
   for pair in $spec; do
     IFS="$oldifs"
     name="${pair%%=*}"; val="${pair#*=}"
-    if [ "$name" = "$1" ] && [ -n "$val" ]; then
+    if [ -n "$name" ] && [ -n "$val" ] && [ "${1#"$name"}" != "$1" ]; then
       case "$val" in *:*) fg="${val%%:*}"; bg="${val#*:}";; *) fg=''; bg="$val";; esac
       bg="$(color_code "$bg")"; [ -n "$bg" ] || return 0
       if [ -n "$fg" ]; then fg="$(color_code "$fg")"
@@ -171,17 +173,6 @@ project_color() { # <project> -> SGR prefix from @tmuxopticon-project-colors, ''
     IFS=';'
   done
   IFS="$oldifs"
-}
-
-paint_header() { # <text> <project> <colour> <base style> -> text with the project badged
-  # Only the project token wears the badge; " / dir (host)" keeps the row's own
-  # style, which <base> re-applies after the badge's reset. A row truncated
-  # inside the token badges what is left of it.
-  local text="$1" tok="$2" col="$3" base="$4"
-  if [ -z "$col" ]; then printf '%s' "$text"
-  elif [ -n "$tok" ] && [ "${text#"$tok"}" != "$text" ]; then printf '%s%s%s%s%s' "$col" "$tok" "$C_RESET" "$base" "${text#"$tok"}"
-  else printf '%s%s%s%s' "$col" "$text" "$C_RESET" "$base"
-  fi
 }
 
 ordered_sessions() { # canonical order, shared by render / jump / click / move
@@ -617,7 +608,7 @@ provider_box() { # provider_box <title> <cachefile> <tw> [max-detail-lines] -> t
 render_frame() { # build + paint one frame (called from render, inside a subshell)
   local w h tw EOL=$'\033[K\n'
   w="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)"
-  [ -n "$w" ] || w="$(opt @tmuxopticon-width 42)"
+  [ -n "$w" ] || w="$(opt @tmuxopticon-width 52)"
   h="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_height}' 2>/dev/null)"
   case "$h" in ''|*[!0-9]*) h=40;; esac
   tw=$(( w - 1 )); [ "$tw" -lt 1 ] && tw=1           # usable text width (no indent)
@@ -656,7 +647,7 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
 
   # --- build the frame + a row->session map, then paint once (no flicker) ---
   # \033[K clears each line to its end; \033[J clears any leftover rows below.
-  local out='' rows='' cur s idx=0 mark jump name dir ptok pcol prows nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
+  local out='' rows='' cur s idx=0 mark jump name dir pcol prows nb hdr note ncol nfirst npfx nline pidx stat lbl ppath seg segp glyph scol defl col pad budget gap line numpfx nlen=3 prow=0
   cur="$(current_session)"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
@@ -677,15 +668,16 @@ render_frame() { # build + paint one frame (called from render, inside a subshel
     # truncate to the room *left of* the "▶[N]  " prefix (7 cols on the active
     # row — mark+jump+chip space+2 gaps — 6 on the rest), so a long dir name
     # never overflows the sidebar width and wraps onto the next row.
-    # A project listed in @tmuxopticon-project-colors wears a coloured badge, so
-    # the sessions you live in are spotted before the text is read.
-    ptok="${dir%% / *}"; ptok="${ptok%% (*}"; pcol="$(project_color "$ptok")"
+    # A header starting with a project listed in @tmuxopticon-project-colors is
+    # painted in that colour, so the sessions you live in are spotted before
+    # the text is read. Only this row — the title and panes stay plain.
+    pcol="$(project_color "$dir")"
     if [ "$s" = "$cur" ]; then                          # make the active session pop
       nb=$(( tw - 7 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}$(paint_header "${dir:0:nb}" "$ptok" "$pcol" "$C_BOLD")${C_RESET}"
+      hdr="${C_CUR}${mark}${jump} ${C_RESET}  ${C_BOLD}${pcol}${dir:0:nb}${C_RESET}"
     else
       nb=$(( tw - 6 )); [ "$nb" -lt 1 ] && nb=1
-      hdr="${mark}${jump}  $(paint_header "${dir:0:nb}" "$ptok" "$pcol" '')${C_RESET}"
+      hdr="${mark}${jump}  ${pcol}${dir:0:nb}${C_RESET}"
     fi
     out+="${hdr}${EOL}"; rows+="${idx}"$'\n'; prow=$((prow + 1))      # header: ▶[N]  dir
     if [ -n "$name" ]; then
@@ -804,7 +796,7 @@ in_current_window() { # -> sidebar pane id in the current window, if any
 }
 
 open_here() { # open the sidebar in the current window, keep focus on the work pane
-  local width; width="$(opt @tmuxopticon-width 42)"
+  local width; width="$(opt @tmuxopticon-width 52)"
   # -f spans the full window height (not just the active pane), so the sidebar
   # is a true left column that sits beside any existing splits instead of
   # carving one of them in half. -b puts it on the left, -h is a side split.
@@ -827,7 +819,7 @@ warm_everywhere() { # open the sidebar in every session's active window, focus u
   # handles those on arrival, as it always has).
   sidebar_active || return 0
   local width sess have zoomed prev new
-  width="$(opt @tmuxopticon-width 42)"
+  width="$(opt @tmuxopticon-width 52)"
   while IFS= read -r sess; do
     [ -n "$sess" ] || continue
     zoomed="$(tmux display-message -p -t "=$sess:" '#{window_zoomed_flag}' 2>/dev/null)"
@@ -851,7 +843,7 @@ reset_width() { # warm every session, then snap every sidebar to @tmuxopticon-wi
   # proportionally, so the sidebar drifts from its configured width. The render
   # loop re-reads pane_width every tick, so resizing alone is a full refresh.
   warm_everywhere
-  local width; width="$(opt @tmuxopticon-width 42)"
+  local width; width="$(opt @tmuxopticon-width 52)"
   tmux list-panes -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
     | awk -v t="$SIDEBAR_TITLE" '$2 == t { print $1 }' \
     | while IFS= read -r p; do tmux resize-pane -t "$p" -x "$width" 2>/dev/null || true; done
@@ -1066,11 +1058,11 @@ prefix is ${C_BOLD}${disp}${C_RESET} — press & release it, then the key below.
     Icons:  ${C_DONE}○ ok${C_RESET}   • info   ${C_DOWN}● needs attention${C_RESET}   ${C_ALERT} ⚠ ERROR ${C_RESET}   ${C_WAIT}Last sync: …${C_RESET} (cron stopped)
 
   ${C_BOLD}Config${C_RESET}  (set -g in your .tmux.conf)
-    @tmuxopticon-width           sidebar width in columns       (default 42)
+    @tmuxopticon-width           sidebar width in columns       (default 52)
     @tmuxopticon-interval        redraw interval in seconds      (default 2)
     @tmuxopticon-provider-stale  secs before a cache is "stale"  (default 180)
     @tmuxopticon-host-aliases    from=to;… aliases for SSH-path hostnames
-    @tmuxopticon-project-colors  name=bg;name=fg:bg;… header badges per project
+    @tmuxopticon-project-colors  name=bg;name=fg:bg;… colour headers starting with name
     @tmuxopticon-default-keys    set 'off' to bind the keys yourself
 EOF
 }
